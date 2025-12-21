@@ -461,6 +461,76 @@ document.addEventListener('DOMContentLoaded', function () {
     if (strokeColorPicker) strokeColorPicker.addEventListener('input', applyStroke);
     if (strokeWidthSlider) strokeWidthSlider.addEventListener('input', applyStroke);
 
+    // 🔑 字间距控制
+    const letterSpacingSlider = document.getElementById('letter-spacing');
+    const letterSpacingInput = document.getElementById('letter-spacing-input');
+
+    function applyLetterSpacing(value) {
+        const spacing = parseFloat(value) || 0;
+        if (letterSpacingInput) letterSpacingInput.value = spacing;
+        if (letterSpacingSlider) letterSpacingSlider.value = Math.max(-50, Math.min(200, spacing));
+
+        const applyToObj = (obj) => {
+            if (obj.type === 'textbox' || obj.type === 'i-text') {
+                obj.set('charSpacing', spacing);
+            }
+        };
+
+        if (selectedObjectsArray && selectedObjectsArray.length > 0) {
+            selectedObjectsArray.forEach(applyToObj);
+        } else if (selectedObject) {
+            applyToObj(selectedObject);
+        }
+        if (canvas) canvas.renderAll();
+        history.saveState();
+    }
+
+    if (letterSpacingSlider) {
+        letterSpacingSlider.addEventListener('input', function () {
+            applyLetterSpacing(this.value);
+        });
+    }
+    if (letterSpacingInput) {
+        letterSpacingInput.addEventListener('change', function () {
+            applyLetterSpacing(this.value);
+        });
+    }
+
+    // 🔑 行高控制
+    const lineHeightSlider = document.getElementById('line-height');
+    const lineHeightInput = document.getElementById('line-height-input');
+
+    function applyLineHeight(value) {
+        const lh = parseFloat(value) || 1.2;
+        if (lineHeightInput) lineHeightInput.value = lh.toFixed(1);
+        if (lineHeightSlider) lineHeightSlider.value = Math.max(0.8, Math.min(3, lh));
+
+        const applyToObj = (obj) => {
+            if (obj.type === 'textbox' || obj.type === 'i-text') {
+                obj.set('lineHeight', lh);
+            }
+        };
+
+        if (selectedObjectsArray && selectedObjectsArray.length > 0) {
+            selectedObjectsArray.forEach(applyToObj);
+        } else if (selectedObject) {
+            applyToObj(selectedObject);
+        }
+        if (canvas) canvas.renderAll();
+        history.saveState();
+    }
+
+    if (lineHeightSlider) {
+        lineHeightSlider.addEventListener('input', function () {
+            applyLineHeight(this.value);
+        });
+    }
+    if (lineHeightInput) {
+        lineHeightInput.addEventListener('change', function () {
+            applyLineHeight(this.value);
+        });
+    }
+
     // 绑定新增文本按钮
     const addTextBtn = document.getElementById('add-text-btn');
     if (addTextBtn) {
@@ -588,6 +658,16 @@ document.addEventListener('DOMContentLoaded', function () {
             }
             obj.setCoords();
         });
+
+        // 🔑 刷新活动选择组的边界框
+        const activeSelection = canvas.getActiveObject();
+        if (activeSelection && activeSelection.type === 'activeSelection') {
+            activeSelection.setCoords();
+            // 强制重新计算选择组边界
+            canvas.discardActiveObject();
+            const sel = new fabric.ActiveSelection(objects, { canvas: canvas });
+            canvas.setActiveObject(sel);
+        }
 
         canvas.renderAll();
         history.saveState();

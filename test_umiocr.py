@@ -157,17 +157,54 @@ def remove_text():
         if image is None:
             raise Exception("无法读取图片")
             
-        # 创建掩码
+        # --- 精准蒙版生成逻辑 (视频精髓：边缘检测+自适应阈值) ---
         mask = np.zeros(image.shape[:2], dtype=np.uint8)
         boxes_data = json.loads(boxes)
         
-        for box in boxes_data:
-            points = np.array(box['box']).astype(np.int32)
-            cv2.fillPoly(mask, [points], 255)
+        # 保存调试用的蒙版
+        debug_dir = os.path.join('static', 'debug')
+        os.makedirs(debug_dir, exist_ok=True)
         
-        # 轻微膨胀(3像素)确保覆盖文字边缘
-        kernel = np.ones((3,3), np.uint8)
-        mask = cv2.dilate(mask, kernel, iterations=1)
+        for box_item in boxes_data:
+            # 1. 提取框选区域 (ROI)
+            points = np.array(box_item['box']).astype(np.int32)
+            x, y, w, h = cv2.boundingRect(points)
+            
+            # 边界检查
+            y_start, y_end = max(0, y), min(image.shape[0], y+h)
+            x_start, x_end = max(0, x), min(image.shape[1], x+w)
+            
+            roi = image[y_start:y_end, x_start:x_end]
+            if roi.size == 0: continue
+            
+            # 2. 灰度化
+            roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            
+            # 3. 边缘检测 (Canny) - 精准找出文字笔画轮廓
+            edges = cv2.Canny(roi_gray, 50, 150)
+            
+            # 4. 使用边缘作为种子，膨胀填充笔画区域
+            # 先对边缘进行膨胀，让笔画轮廓闭合
+            kernel_close = np.ones((3, 3), np.uint8)
+            edges_dilated = cv2.dilate(edges, kernel_close, iterations=2)
+            
+            # 5. 填充闭合区域 (让笔画内部也被填满)
+            # 找轮廓并填充
+            contours, _ = cv2.findContours(edges_dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            roi_mask = np.zeros(roi_gray.shape, dtype=np.uint8)
+            cv2.drawContours(roi_mask, contours, -1, 255, cv2.FILLED)
+            
+            # 6. 额外膨胀确保完全覆盖文字边缘
+            kernel_expand = np.ones((5, 5), np.uint8)
+            roi_mask = cv2.dilate(roi_mask, kernel_expand, iterations=1)
+            
+            # 7. 将提取出的精准笔画填回全局蒙版
+            mask[y_start:y_end, x_start:x_end] = cv2.bitwise_or(mask[y_start:y_end, x_start:x_end], roi_mask)
+        
+        # 保存调试蒙版
+        debug_mask_path = os.path.join(debug_dir, f'debug_mask_{filename}.png')
+        cv2.imwrite(debug_mask_path, mask)
+        print(f"调试蒙版已保存: {debug_mask_path}")
         
         # 保存掩码图片
         cv2.imwrite(mask_path, mask)
@@ -177,7 +214,7 @@ def remove_text():
             img_base64 = base64.b64encode(img_file.read()).decode()
             mask_base64 = base64.b64encode(mask_file.read()).decode()
             
-            # 准备 JSON 数据
+            # 准备 JSON 数据请求 IOPaint (Lama模型)
             data = {
                 'image': f'data:image/png;base64,{img_base64}',
                 'mask': f'data:image/png;base64,{mask_base64}',
@@ -185,27 +222,35 @@ def remove_text():
                 'device': 'cuda'
             }
             
-            # 发送请求到 IOPaint
             response = requests.post(
                 "http://127.0.0.1:8080/api/v1/inpaint",
                 json=data,
                 headers={'Content-Type': 'application/json'},
                 timeout=30
             )
-        
-        # 清理临时文件
-        try:
-            if os.path.exists(mask_path):
-                os.remove(mask_path)
-            if os.path.exists(filepath):
-                os.remove(filepath)
-        except Exception as e:
-            print(f"清理文件失败: {str(e)}")
             
         if response.status_code == 200:
-            # 直接保存返回的图片数据
-            with open(output_path, 'wb') as f:
-                f.write(response.content)
+            # 获取修复后的图像数据
+            nparr = np.frombuffer(response.content, np.uint8)
+            inpainted_img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            
+            # --- 高斯模糊融合处理 (视频最后一步技巧) ---
+            # 只对有蒙版的区域边缘进行微弱的高斯模糊，让效果更自然
+            mask_dilated = cv2.dilate(mask, np.ones((5,5), np.uint8), iterations=1)
+            blurred_img = cv2.GaussianBlur(inpainted_img, (3, 3), 0)
+            
+            # 使用膨胀后的蒙版作为权重，将模糊后的边缘融合回原图
+            # 这能有效消除局部修复导致的接缝感
+            mask_3c = cv2.cvtColor(mask_dilated, cv2.COLOR_GRAY2BGR) / 255.0
+            final_img = (inpainted_img * (1 - mask_3c * 0.3) + blurred_img * (mask_3c * 0.3)).astype(np.uint8)
+            
+            cv2.imwrite(output_path, final_img)
+            
+            # 清理临时文件
+            try:
+                if os.path.exists(mask_path): os.remove(mask_path)
+                if os.path.exists(filepath): os.remove(filepath)
+            except: pass
             
             return jsonify({
                 'success': True,
@@ -215,9 +260,7 @@ def remove_text():
             raise Exception(f"IOPaint 错误: 状态码 {response.status_code}")
             
     except Exception as e:
-        print(f"\nError: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        print(f"处理失败: {str(e)}")
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/output/<filename>')
@@ -1287,32 +1330,49 @@ def remove_text(image_path, text_positions, output_path, bg_model='opencv'):
                 
                 # 裁剪文本区域
                 roi = image[y_min:y_max, x_min:x_max]
+                h, w = roi.shape[:2]
+                
+                # === HSV 颜色分割提取文字 ===
+                # 转换到HSV颜色空间，便于颜色分析
+                hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
                 gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
                 
-                # 使用Otsu阈值分离文字和背景
-                _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                
-                # 判断文字是深色还是浅色
-                # 计算边缘像素的平均值作为背景参考
-                h, w = gray.shape
+                # 分析边缘像素（背景）和中心像素（文字）的颜色差异
                 edge_pixels = np.concatenate([
-                    gray[0, :], gray[-1, :], gray[:, 0], gray[:, -1]
+                    roi[0, :], roi[-1, :], roi[:, 0], roi[:, -1]
                 ])
-                bg_mean = np.mean(edge_pixels)
-                center_mean = np.mean(gray[h//4:3*h//4, w//4:3*w//4])
+                center_region = roi[h//4:3*h//4, w//4:3*w//4]
                 
-                # 如果中心比边缘暗，说明文字是深色的
-                if center_mean < bg_mean:
-                    # 深色文字，取binary中的黑色部分
-                    text_mask = cv2.bitwise_not(binary)
+                # 计算边缘（背景）的平均亮度
+                bg_gray = np.mean([np.mean(gray[0, :]), np.mean(gray[-1, :]), 
+                                   np.mean(gray[:, 0]), np.mean(gray[:, -1])])
+                center_gray = np.mean(gray[h//4:3*h//4, w//4:3*w//4])
+                
+                # 根据亮度差异判断文字是深色还是浅色
+                if center_gray < bg_gray - 20:
+                    # 深色文字在浅色背景上：提取暗像素
+                    _, text_mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+                elif center_gray > bg_gray + 20:
+                    # 浅色文字在深色背景上：提取亮像素
+                    _, text_mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
                 else:
-                    # 浅色文字，取binary中的白色部分
-                    text_mask = binary
+                    # 对比度不明显，使用自适应阈值
+                    text_mask = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                                       cv2.THRESH_BINARY_INV, 11, 2)
                 
-                # 使用闭运算填充破碎的笔画
-                kernel_size = max(3, min(h, w) // 15)
-                kernel = np.ones((kernel_size, kernel_size), np.uint8)
-                text_mask = cv2.morphologyEx(text_mask, cv2.MORPH_CLOSE, kernel)
+                # 去除边缘噪点：只保留连通区域中面积较大的部分
+                contours, _ = cv2.findContours(text_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                min_area = (h * w) * 0.01  # 最小面积阈值：区域面积的1%
+                filtered_mask = np.zeros_like(text_mask)
+                for cnt in contours:
+                    if cv2.contourArea(cnt) > min_area:
+                        cv2.drawContours(filtered_mask, [cnt], -1, 255, cv2.FILLED)
+                
+                text_mask = filtered_mask
+                
+                # 轻微膨胀确保覆盖文字边缘（只膨胀2像素，防止过度扩展）
+                kernel = np.ones((3, 3), np.uint8)
+                text_mask = cv2.dilate(text_mask, kernel, iterations=1)
                 
                 # 将文字蒙版放回原位置
                 mask[y_min:y_max, x_min:x_max] = cv2.bitwise_or(
@@ -1424,9 +1484,24 @@ def remove_text(image_path, text_positions, output_path, bg_model='opencv'):
                                         with open(pass_output_path, 'rb') as f:
                                             current_image_data = base64.b64encode(f.read()).decode()
                                     else:
-                                        # 最后一次擦除，将结果复制到最终输出路径
-                                        shutil.copy(pass_output_path, output_path)
-                                        print(f"最终擦除结果已保存到: {output_path}")
+                                        # 最后一次擦除，应用高斯融合后保存
+                                        inpainted = cv2.imread(pass_output_path)
+                                        if inpainted is not None:
+                                            # === 高斯模糊融合 (视频最后一步技巧) ===
+                                            # 对修复区域边缘进行微弱模糊，消除接缝感
+                                            mask_dilated = cv2.dilate(mask, np.ones((7,7), np.uint8), iterations=1)
+                                            blurred = cv2.GaussianBlur(inpainted, (5, 5), 0)
+                                            
+                                            # 创建3通道蒙版用于混合
+                                            mask_3c = cv2.cvtColor(mask_dilated, cv2.COLOR_GRAY2BGR) / 255.0
+                                            # 在蒙版区域用30%的模糊图融合，消除边缘硬切感
+                                            final = (inpainted * (1 - mask_3c * 0.3) + blurred * (mask_3c * 0.3)).astype(np.uint8)
+                                            
+                                            cv2.imwrite(output_path, final)
+                                            print(f"最终擦除结果(含高斯融合)已保存到: {output_path}")
+                                        else:
+                                            shutil.copy(pass_output_path, output_path)
+                                            print(f"最终擦除结果已保存到: {output_path}")
                                     
                                     inpaint_success = True
                                     break  # 当前pass成功，中断重试循环
@@ -1502,9 +1577,16 @@ def remove_text(image_path, text_positions, output_path, bg_model='opencv'):
         
         try:
             # 使用OpenCV的inpaint函数
-            result = cv2.inpaint(image, mask, 7, cv2.INPAINT_NS)
-            cv2.imwrite(output_path, result)
-            print(f"使用OpenCV成功修复图像并保存到: {output_path}")
+            result = cv2.inpaint(image, mask, 3, cv2.INPAINT_TELEA)  # 使用TELEA算法，radius=3
+            
+            # === 高斯模糊融合 (视频最后一步技巧) ===
+            mask_dilated = cv2.dilate(mask, np.ones((7,7), np.uint8), iterations=1)
+            blurred = cv2.GaussianBlur(result, (5, 5), 0)
+            mask_3c = cv2.cvtColor(mask_dilated, cv2.COLOR_GRAY2BGR) / 255.0
+            final = (result * (1 - mask_3c * 0.3) + blurred * (mask_3c * 0.3)).astype(np.uint8)
+            
+            cv2.imwrite(output_path, final)
+            print(f"使用OpenCV成功修复图像(含高斯融合)并保存到: {output_path}")
             return True
         except Exception as e:
             print(f"OpenCV修复失败: {str(e)}")

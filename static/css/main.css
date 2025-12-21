@@ -1034,12 +1034,13 @@ label.upload-zone::before {
     }
 }
 
-/* 编辑器控件 */
+/* 编辑器控件 - 紧凑布局 */
 .edit-group {
     background: var(--bg-primary);
-    padding: 16px;
-    border-radius: 12px;
+    padding: 10px 12px;
+    border-radius: 10px;
     border: 1px solid var(--border);
+    margin-bottom: 6px;
 }
 
 .edit-group:last-child {
@@ -1048,9 +1049,9 @@ label.upload-zone::before {
 
 .edit-group label {
     display: block;
-    font-size: 12px;
+    font-size: 11px;
     color: var(--text-secondary);
-    margin-bottom: 8px;
+    margin-bottom: 6px;
 }
 
 .slider-row {

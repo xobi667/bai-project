@@ -293,83 +293,111 @@
                 <div class="card-header">
                     <span class="style-header">文字编辑 ✏️</span>
                 </div>
-                <div class="card-body">
-                    <!-- 字体选择 -->
+                <div class="card-body" style="padding: 10px;">
+                    <!-- 字体 + 渲染模式 (合并一行) -->
                     <div class="edit-group">
-                        <label>字体</label>
-                        <select id="font-family" class="font-select">
-                            <option value="Arial, sans-serif">Arial</option>
-                            <option value="'Microsoft YaHei', sans-serif">微软雅黑</option>
-                            <option value="SimHei, sans-serif">黑体</option>
-                            <option value="SimSun, serif">宋体</option>
-                            <option value="KaiTi, serif">楷体</option>
-                            <option value="'Noto Sans SC', sans-serif">Noto Sans SC</option>
-                            <option value="'PingFang SC', sans-serif">苹方</option>
-                            <option value="Georgia, serif">Georgia</option>
-                            <option value="'Times New Roman', serif">Times New Roman</option>
-                        </select>
+                        <div style="display: flex; gap: 8px;">
+                            <div style="flex: 2;">
+                                <label>字体</label>
+                                <select id="font-family" class="font-select" style="height: 32px; font-size: 12px;">
+                                    <option value="Arial, sans-serif">Arial</option>
+                                    <option value="'Microsoft YaHei', sans-serif">微软雅黑</option>
+                                    <option value="SimHei, sans-serif">黑体</option>
+                                    <option value="SimSun, serif">宋体</option>
+                                    <option value="KaiTi, serif">楷体</option>
+                                    <option value="'Noto Sans SC', sans-serif">Noto Sans SC</option>
+                                    <option value="'PingFang SC', sans-serif">苹方</option>
+                                    <option value="Georgia, serif">Georgia</option>
+                                    <option value="'Times New Roman', serif">Times New Roman</option>
+                                </select>
+                            </div>
+                            <div style="flex: 1;">
+                                <label>渲染</label>
+                                <select id="text-render-mode" class="font-select"
+                                    style="height: 32px; font-size: 11px;">
+                                    <option value="default">默认</option>
+                                    <option value="sharp" selected>锐利</option>
+                                    <option value="strong">浑厚</option>
+                                </select>
+                            </div>
+                        </div>
                     </div>
 
-                    <!-- 文字渲染模式 -->
-                    <div class="edit-group">
-                        <label>渲染模式 (锐化)</label>
-                        <select id="text-render-mode" class="font-select">
-                            <option value="default">默认 (平滑)</option>
-                            <option value="sharp" selected>锐利 (Sharp)</option>
-                            <option value="strong">浑厚 (Strong)</option>
-                        </select>
-                    </div>
-
-                    <!-- 字体大小 -->
+                    <!-- 字号 (简化) -->
                     <div class="edit-group">
                         <label>字号</label>
                         <div class="slider-row">
                             <input type="range" id="font-size" min="8" max="120" value="20">
-                            <input type="number" id="font-size-input" class="size-input" value="20" min="8" max="200">
+                            <input type="number" id="font-size-input" class="size-input" value="20" min="8" max="200"
+                                style="width: 50px; height: 32px;">
                             <span class="size-unit">px</span>
                         </div>
-                        <!-- 快捷字号按钮 -->
-                        <div class="shortcut-container" style="display: flex; gap: 8px; margin-top: 10px;">
+                        <div style="display: flex; gap: 6px; margin-top: 6px;">
                             <button class="style-btn size-shortcut-btn" data-size="24"
-                                style="flex: 1; min-width: 0; padding: 4px 0; font-size: 13px;">24</button>
+                                style="flex: 1; padding: 3px 0; font-size: 12px;">24</button>
                             <button class="style-btn size-shortcut-btn" data-size="35"
-                                style="flex: 1; min-width: 0; padding: 4px 0; font-size: 13px; font-weight: bold; color: #a78bfa;">35</button>
+                                style="flex: 1; padding: 3px 0; font-size: 12px; font-weight: bold; color: #a78bfa;">35</button>
                             <button class="style-btn size-shortcut-btn" data-size="48"
-                                style="flex: 1; min-width: 0; padding: 4px 0; font-size: 13px;">48</button>
+                                style="flex: 1; padding: 3px 0; font-size: 12px;">48</button>
                             <button class="style-btn size-shortcut-btn" data-size="64"
-                                style="flex: 1; min-width: 0; padding: 4px 0; font-size: 13px;">64</button>
+                                style="flex: 1; padding: 3px 0; font-size: 12px;">64</button>
                         </div>
                     </div>
 
-                    <!-- 字体样式：加粗/斜体 -->
+                    <!-- 样式 + 颜色 (合并一行) -->
                     <div class="edit-group">
-                        <label>样式</label>
-                        <div class="btn-group style-buttons">
-                            <button id="toggle-bold" class="style-btn" title="粗体 (Ctrl+B)">
-                                <strong>B</strong>
-                            </button>
-                            <button id="toggle-italic" class="style-btn" title="斜体 (Ctrl+I)">
-                                <em>I</em>
-                            </button>
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <div>
+                                <label>样式</label>
+                                <div class="btn-group style-buttons">
+                                    <button id="toggle-bold" class="style-btn" title="粗体"
+                                        style="width: 32px; height: 32px;"><strong>B</strong></button>
+                                    <button id="toggle-italic" class="style-btn" title="斜体"
+                                        style="width: 32px; height: 32px;"><em>I</em></button>
+                                </div>
+                            </div>
+                            <div style="flex: 1;">
+                                <label>颜色</label>
+                                <div class="color-row">
+                                    <input type="color" id="text-color" value="#000000"
+                                        style="width: 40px; height: 32px;">
+                                    <span id="text-color-hex" class="color-hex">#000000</span>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
-                    <!-- 文字颜色 -->
-                    <div class="edit-group">
-                        <label>填充颜色</label>
-                        <div class="color-row">
-                            <input type="color" id="text-color" value="#000000">
-                            <span id="text-color-hex" class="color-hex">#000000</span>
-                        </div>
-                    </div>
-
-                    <!-- 描边设置 -->
+                    <!-- 描边 -->
                     <div class="edit-group">
                         <label>描边</label>
-                        <div class="stroke-row">
-                            <input type="color" id="stroke-color" value="#FFFFFF">
-                            <input type="range" id="stroke-width" min="0" max="10" value="0" class="stroke-slider">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <input type="color" id="stroke-color" value="#FFFFFF" style="width: 36px; height: 32px;">
+                            <input type="range" id="stroke-width" min="0" max="10" value="0" style="flex: 1;">
                             <span id="stroke-width-value" class="slider-value">0px</span>
+                        </div>
+                    </div>
+
+                    <!-- 字间距 -->
+                    <div class="edit-group">
+                        <label>字间距</label>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <input type="range" id="letter-spacing" min="-50" max="200" value="0" step="10"
+                                style="flex: 1;">
+                            <input type="number" id="letter-spacing-input" class="size-input" value="0" step="10"
+                                style="width: 55px; height: 32px;">
+                            <span class="size-unit">‰</span>
+                        </div>
+                    </div>
+
+                    <!-- 行高 -->
+                    <div class="edit-group">
+                        <label>行高</label>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <input type="range" id="line-height" min="0.8" max="3" value="1.2" step="0.1"
+                                style="flex: 1;">
+                            <input type="number" id="line-height-input" class="size-input" value="1.2" step="0.1"
+                                style="width: 50px; height: 32px;">
+                            <span class="size-unit">x</span>
                         </div>
                     </div>
 
