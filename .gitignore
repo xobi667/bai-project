@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+**/venv/
+.env
+
+# Models and Large Files
+models/
+*.vsix
+*.ttf
+*.otf
+
+# Runtime data
+outputs/
+uploads/
+static/uploads/
+static/debug/
+
+# Editor
+.vscode/
+.idea/
+.DS_Store

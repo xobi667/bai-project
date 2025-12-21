@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>xobi Image Translator 😈</title>
+    <!-- 引入fabric.js库 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <!-- Google Fonts: Varela Round (Rounded/Cute) -->
+    <link href="https://fonts.googleapis.com/css2?family=Varela+Round&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/main.css?v=25">
+    <!-- 引入JSZip用于批量打包下载 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</head>
+
+<body>
+    <!-- 顶部导航栏 -->
+    <header class="top-header">
+        <div class="header-left">
+            <div class="logo">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="url(#logo-grad)" stroke-width="2">
+                    <defs>
+                        <linearGradient id="logo-grad" x1="0" y1="0" x2="1" y2="1">
+                            <stop offset="0%" stop-color="#d946ef" />
+                            <stop offset="100%" stop-color="#a855f7" />
+                        </linearGradient>
+                    </defs>
+                    <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path>
+                </svg>
+                <a class="nav-brand" href="/">
+                    <span class="logo-text">Xobi Trans</span><span class="logo-emoji">💀</span>
+                </a>
+            </div>
+        </div>
+        <div class="header-center">
+            <div class="workflow-steps">
+                <div class="step active">
+                    <span class="step-num">1</span>
+                    <span class="step-text">上传图片 📸</span>
+                </div>
+                <div class="step-arrow">→</div>
+                <div class="step">
+                    <span class="step-num">2</span>
+                    <span class="step-text">智能翻译 ✨</span>
+                </div>
+                <div class="step-arrow">→</div>
+                <div class="step">
+                    <span class="step-num">3</span>
+                    <span class="step-text">编辑下载 🎀</span>
+                </div>
+            </div>
+        </div>
+        <div class="header-right">
+            <button class="header-btn" id="help-btn" title="使用帮助">
+                <span style="font-size: 20px;">📖</span>
+            </button>
+            <button class="header-btn danger" id="clear-cache-btn" title="清除缓存">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                </svg>
+            </button>
+        </div>
+    </header>
+
+    <!-- 主体区域 - 3栏布局 -->
+    <main class="main-container">
+        <!-- 左侧面板 - 样式类名更新 -->
+        <aside class="aside-panel left-side">
+            <div class="left-panel-scroll-content">
+
+                <!-- 上传图片 - 移至顶部 (用户请求) -->
+                <div class="panel-card">
+                    <div class="card-header">
+                        <span>上传图片 🍬</span>
+                    </div>
+                    <div class="card-body">
+                        <form id="uploadForm" enctype="multipart/form-data" method="post" action="/process_image">
+                            <!-- 使用 label 替代 div，原生关联 input，无需JS，彻底解决点击死循环 -->
+                            <div class="upload-zone-wrapper">
+                                <input type="file" id="multi-image-upload" name="image" accept="image/*" multiple
+                                    style="display: none;">
+                                <label class="upload-zone compact-zone" for="multi-image-upload" id="uploadZone">
+                                    <div class="upload-content">
+                                        <div class="upload-icon-large compact-icon">
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"
+                                                viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                                <polyline points="17 8 12 3 7 8"></polyline>
+                                                <line x1="12" y1="3" x2="12" y2="15"></line>
+                                            </svg>
+                                        </div>
+                                        <p class="upload-text compact-text">点击 / 拖拽上传</p>
+                                    </div>
+                                </label>
+                            </div>
+                        </form>
+                        <div id="uploadStatus" class="status-msg"></div>
+                    </div>
+                </div>
+
+                <div class="panel-card">
+                    <div class="card-header">
+                        <span>语言设置 🌐</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="lang-group">
+                            <label>源语言</label>
+                            <select id="source-lang">
+                                <option value="auto">🔍 自动检测</option>
+                                <option value="zh" selected>🇨🇳 中文</option>
+                                <option value="en">🇺🇸 英文</option>
+                                <option value="ja">🇯🇵 日文</option>
+                                <option value="ko">🇰🇷 韩文</option>
+                            </select>
+                        </div>
+                        <div class="lang-swap">
+                            <button class="swap-btn" id="swapLangs" title="交换语言">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+                                    fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M7 16V4m0 0L3 8m4-4 4 4"></path>
+                                    <path d="M17 8v12m0 0 4-4m-4 4-4-4"></path>
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="lang-group">
+                            <label>目标语言 <small>(可多选)</small></label>
+                            <div id="target-langs-container" class="checkbox-grid">
+                                <label class="lang-checkbox">
+                                    <input type="checkbox" name="target-lang" value="en" checked>
+                                    <span class="checkbox-label">🇺🇸 英语</span>
+                                </label>
+                                <label class="lang-checkbox">
+                                    <input type="checkbox" name="target-lang" value="th">
+                                    <span class="checkbox-label">🇹🇭 泰语</span>
+                                </label>
+                                <label class="lang-checkbox">
+                                    <input type="checkbox" name="target-lang" value="id">
+                                    <span class="checkbox-label">🇮🇩 印尼语</span>
+                                </label>
+                                <label class="lang-checkbox">
+                                    <input type="checkbox" name="target-lang" value="vi">
+                                    <span class="checkbox-label">🇻🇳 越南语</span>
+                                </label>
+                                <label class="lang-checkbox">
+                                    <input type="checkbox" name="target-lang" value="ru">
+                                    <span class="checkbox-label">🇷🇺 俄语</span>
+                                </label>
+                                <label class="lang-checkbox">
+                                    <input type="checkbox" name="target-lang" value="ja">
+                                    <span class="checkbox-label">🇯🇵 日语</span>
+                                </label>
+                                <label class="lang-checkbox">
+                                    <input type="checkbox" name="target-lang" value="ko">
+                                    <span class="checkbox-label">🇰🇷 韩语</span>
+                                </label>
+                                <label class="lang-checkbox">
+                                    <input type="checkbox" name="target-lang" value="zh">
+                                    <span class="checkbox-label">🇨🇳 中文</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 背景处理模型选择 -->
+                <div class="panel-card">
+                    <div class="card-header">
+                        <span>背景处理 🎨</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="model-selector">
+                            <label class="model-option">
+                                <input type="radio" name="bg-model" value="opencv" checked>
+                                <span class="model-label">
+                                    <span class="model-name">OpenCV</span>
+                                    <span class="model-desc">快速 · 本地处理</span>
+                                </span>
+                            </label>
+                            <label class="model-option">
+                                <input type="radio" name="bg-model" value="iop">
+                                <span class="model-label">
+                                    <span class="model-name">IOP AI</span>
+                                    <span class="model-desc">精准 · 云端处理</span>
+                                </span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+
+
+                <!-- 翻译按钮 - 放在底部 -->
+                <!-- 🔑 注意：onclick已移除！事件由JS处理，避免双重调用 -->
+            </div>
+            <div class="left-panel-footer">
+                <button id="translate-button" class="action-btn primary"
+                    style="width: 100%; cursor: pointer !important; pointer-events: auto !important;">
+                    <span>⚡ 开始翻译 GO!</span>
+                </button>
+
+                <!-- 批处理进度条 (translateImage函数需要) -->
+                <div id="batch-progress" style="display: none; margin-top: 10px;">
+                    <div class="progress-bar-bg"
+                        style="background: rgba(255,255,255,0.1); border-radius: 99px; height: 8px; overflow: hidden;">
+                        <div id="batch-progress-bar"
+                            style="width: 0%; height: 100%; background: var(--success); transition: width 0.3s;"></div>
+                    </div>
+                    <div id="batch-status-text"
+                        style="text-align: center; font-size: 12px; margin-top: 5px; color: var(--text-secondary);">
+                        准备中...
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- 中心工作区 -->
+        <section class="center-workspace">
+            <div class="workspace-header">
+                <div class="view-tabs">
+                    <button class="view-tab active" data-view="split">并排对比</button>
+                    <button class="view-tab" data-view="overlay">叠加对比</button>
+                </div>
+                <div class="zoom-controls">
+                    <button class="zoom-btn" id="zoomOut">−</button>
+                    <span class="zoom-level" id="zoomLevel">100%</span>
+                    <button class="zoom-btn" id="zoomIn">+</button>
+                    <button class="zoom-btn" id="zoomFit">适应</button>
+                </div>
+            </div>
+
+            <div class="preview-container">
+                <div class="image-panel original-panel">
+                    <div class="panel-label">🖼️ 原图</div>
+                    <div class="empty-placeholder" id="original-empty">
+                        <span class="emoji">📷</span>
+                        <span class="text">请在左侧上传图片</span>
+                    </div>
+                    <div class="image-wrapper">
+                        <img id="original-preview" class="preview-image" src="" alt="原始图片" style="display: none;">
+                    </div>
+                </div>
+                <div class="image-panel result-panel">
+                    <div class="panel-label">✨ 翻译结果</div>
+                    <div class="empty-placeholder" id="result-empty">
+                        <span class="emoji">🎨</span>
+                        <span class="text">翻译结果将显示在这里</span>
+                    </div>
+                    <div class="image-wrapper">
+                        <div id="fabricCanvasContainer" style="position: relative;">
+                            <!-- 视觉缓冲画布 (防止Undo闪烁) -->
+                            <canvas id="snapshotCanvas"
+                                style="position: absolute; top: 0; left: 0; pointer-events: none; display: none; z-index: 999;"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 语言版本标签栏 -->
+            <div class="lang-tabs-container" id="langTabsContainer" style="display: none;">
+                <div class="lang-tabs" id="langTabs">
+                    <!-- 标签会由JS动态生成 -->
+                </div>
+            </div>
+
+            <!-- 底部缩略图条 -->
+            <div class="thumbnail-bar" id="thumbnailArea">
+                <div class="thumbnail-placeholder">上传图片后，缩略图将显示在这里</div>
+            </div>
+        </section>
+
+        <!-- 右侧面板 - 编辑器 (强制滚动) -->
+        <aside class="aside-panel right-side"
+            style="overflow-y: scroll !important; overflow-x: hidden; max-height: calc(100vh - 70px);">
+            <!-- 工具面板 (新增) -->
+            <div class="panel-card" id="tools-panel"
+                style="display: none; flex-shrink: 0; margin-bottom: 12px; border: 1px solid rgba(255,255,255,0.1);">
+                <div class="card-header">
+                    <span class="style-header">工具箱 🛠️</span>
+                </div>
+                <div class="card-body" style="padding: 12px;">
+                    <button id="add-text-btn" class="action-btn secondary"
+                        style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 10px; background: rgba(99, 102, 241, 0.2); border: 1px solid rgba(99, 102, 241, 0.5); color: #fff;">
+                        <span style="font-size: 18px; font-weight: bold;">+</span>
+                        <span>新增文本 (Add Text)</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="panel-card" id="text-style-editor" style="display: none; flex-shrink: 0;">
+                <div class="card-header">
+                    <span class="style-header">文字编辑 ✏️</span>
+                </div>
+                <div class="card-body">
+                    <!-- 字体选择 -->
+                    <div class="edit-group">
+                        <label>字体</label>
+                        <select id="font-family" class="font-select">
+                            <option value="Arial, sans-serif">Arial</option>
+                            <option value="'Microsoft YaHei', sans-serif">微软雅黑</option>
+                            <option value="SimHei, sans-serif">黑体</option>
+                            <option value="SimSun, serif">宋体</option>
+                            <option value="KaiTi, serif">楷体</option>
+                            <option value="'Noto Sans SC', sans-serif">Noto Sans SC</option>
+                            <option value="'PingFang SC', sans-serif">苹方</option>
+                            <option value="Georgia, serif">Georgia</option>
+                            <option value="'Times New Roman', serif">Times New Roman</option>
+                        </select>
+                    </div>
+
+                    <!-- 文字渲染模式 -->
+                    <div class="edit-group">
+                        <label>渲染模式 (锐化)</label>
+                        <select id="text-render-mode" class="font-select">
+                            <option value="default">默认 (平滑)</option>
+                            <option value="sharp" selected>锐利 (Sharp)</option>
+                            <option value="strong">浑厚 (Strong)</option>
+                        </select>
+                    </div>
+
+                    <!-- 字体大小 -->
+                    <div class="edit-group">
+                        <label>字号</label>
+                        <div class="slider-row">
+                            <input type="range" id="font-size" min="8" max="120" value="20">
+                            <input type="number" id="font-size-input" class="size-input" value="20" min="8" max="200">
+                            <span class="size-unit">px</span>
+                        </div>
+                        <!-- 快捷字号按钮 -->
+                        <div class="shortcut-container" style="display: flex; gap: 8px; margin-top: 10px;">
+                            <button class="style-btn size-shortcut-btn" data-size="24"
+                                style="flex: 1; min-width: 0; padding: 4px 0; font-size: 13px;">24</button>
+                            <button class="style-btn size-shortcut-btn" data-size="35"
+                                style="flex: 1; min-width: 0; padding: 4px 0; font-size: 13px; font-weight: bold; color: #a78bfa;">35</button>
+                            <button class="style-btn size-shortcut-btn" data-size="48"
+                                style="flex: 1; min-width: 0; padding: 4px 0; font-size: 13px;">48</button>
+                            <button class="style-btn size-shortcut-btn" data-size="64"
+                                style="flex: 1; min-width: 0; padding: 4px 0; font-size: 13px;">64</button>
+                        </div>
+                    </div>
+
+                    <!-- 字体样式：加粗/斜体 -->
+                    <div class="edit-group">
+                        <label>样式</label>
+                        <div class="btn-group style-buttons">
+                            <button id="toggle-bold" class="style-btn" title="粗体 (Ctrl+B)">
+                                <strong>B</strong>
+                            </button>
+                            <button id="toggle-italic" class="style-btn" title="斜体 (Ctrl+I)">
+                                <em>I</em>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 文字颜色 -->
+                    <div class="edit-group">
+                        <label>填充颜色</label>
+                        <div class="color-row">
+                            <input type="color" id="text-color" value="#000000">
+                            <span id="text-color-hex" class="color-hex">#000000</span>
+                        </div>
+                    </div>
+
+                    <!-- 描边设置 -->
+                    <div class="edit-group">
+                        <label>描边</label>
+                        <div class="stroke-row">
+                            <input type="color" id="stroke-color" value="#FFFFFF">
+                            <input type="range" id="stroke-width" min="0" max="10" value="0" class="stroke-slider">
+                            <span id="stroke-width-value" class="slider-value">0px</span>
+                        </div>
+                    </div>
+
+                    <!-- 文本内对齐 -->
+                    <div class="edit-group">
+                        <label>文本对齐</label>
+                        <div class="btn-group align-buttons">
+                            <button class="style-btn align-btn" data-align="left" title="左对齐">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                                    fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="4" y1="6" x2="20" y2="6"></line>
+                                    <line x1="4" y1="12" x2="14" y2="12"></line>
+                                    <line x1="4" y1="18" x2="18" y2="18"></line>
+                                </svg>
+                            </button>
+                            <button class="style-btn align-btn active" data-align="center" title="居中">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                                    fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="4" y1="6" x2="20" y2="6"></line>
+                                    <line x1="8" y1="12" x2="16" y2="12"></line>
+                                    <line x1="6" y1="18" x2="18" y2="18"></line>
+                                </svg>
+                            </button>
+                            <button class="style-btn align-btn" data-align="right" title="右对齐">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                                    fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="4" y1="6" x2="20" y2="6"></line>
+                                    <line x1="10" y1="12" x2="20" y2="12"></line>
+                                    <line x1="6" y1="18" x2="20" y2="18"></line>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 画布对齐 (PS式) -->
+                    <div class="edit-group">
+                        <label>画布对齐</label>
+                        <div class="canvas-align-row">
+                            <button class="align-canvas-btn" id="align-h-left" title="水平靠左">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+                                    fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="4" y1="4" x2="4" y2="20"></line>
+                                    <rect x="8" y="8" width="12" height="8" rx="1"></rect>
+                                </svg>
+                            </button>
+                            <button class="align-canvas-btn" id="align-h-center" title="水平居中">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+                                    fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="12" y1="4" x2="12" y2="20"></line>
+                                    <rect x="6" y="8" width="12" height="8" rx="1"></rect>
+                                </svg>
+                            </button>
+                            <button class="align-canvas-btn" id="align-h-right" title="水平靠右">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+                                    fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="20" y1="4" x2="20" y2="20"></line>
+                                    <rect x="4" y="8" width="12" height="8" rx="1"></rect>
+                                </svg>
+                            </button>
+                            <!-- Row 2 -->
+                            <button class="align-canvas-btn" id="align-v-top" title="垂直靠上">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+                                    fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="4" y1="4" x2="20" y2="4"></line>
+                                    <rect x="8" y="8" width="8" height="12" rx="1"></rect>
+                                </svg>
+                            </button>
+                            <button class="align-canvas-btn" id="align-v-center" title="垂直居中">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+                                    fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="4" y1="12" x2="20" y2="12"></line>
+                                    <rect x="8" y="6" width="8" height="12" rx="1"></rect>
+                                </svg>
+                            </button>
+                            <button class="align-canvas-btn" id="align-v-bottom" title="垂直靠下">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+                                    fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="4" y1="20" x2="20" y2="20"></line>
+                                    <rect x="8" y="4" width="8" height="12" rx="1"></rect>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 多选工具 -->
+                    <div class="edit-group" id="multi-select-tools" style="display: none;">
+                        <label>多选工具</label>
+                        <div class="btn-group">
+                            <button class="tool-btn-wide" id="uniform-width" title="统一宽度">统一宽度</button>
+                            <button class="tool-btn-wide" id="distribute-v" title="垂直均分">垂直均分</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 下载面板 - 点击空白处时显示 -->
+            <div class="panel-card" id="download-panel" style="display: block;">
+                <div class="card-header">
+                    <span>保存导出 💾</span>
+                </div>
+                <div class="card-body">
+                    <button class="action-btn success" id="save-image" onclick="downloadImage()">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="7 10 12 15 17 10"></polyline>
+                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                        </svg>
+                        <span>📥 保存当前</span>
+                    </button>
+                    <div style="height: 12px;"></div>
+                    <button class="action-btn primary" id="download-all-btn" onclick="downloadAllImages()">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
+                        <span>📦 批量下载 All</span>
+                    </button>
+
+                    <!-- 多语言分别下载按钮容器 -->
+                    <div id="multi-lang-downloads" style="margin-top: 12px; display: none;">
+                        <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">按语言下载：</div>
+                        <div id="lang-download-btns" style="display: flex; flex-direction: column; gap: 8px;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 帮助提示已移至顶部按钮 -->
+        </aside>
+    </main>
+
+    <!-- 帮助模态框 -->
+    <div class="help-modal" id="helpModal">
+        <div class="help-modal-content">
+            <div class="help-modal-header">
+                <h3>📖 使用指南</h3>
+                <button class="help-close-btn" id="help-close">&times;</button>
+            </div>
+            <div class="help-modal-body">
+                <div class="help-step">
+                    <span class="help-num">1</span>
+                    <div class="help-text">
+                        <strong>选择语言</strong>
+                        <p>在左侧面板选择源语言和目标语言</p>
+                    </div>
+                </div>
+                <div class="help-step">
+                    <span class="help-num">2</span>
+                    <div class="help-text">
+                        <strong>上传图片</strong>
+                        <p>点击上传区域或拖拽图片到上传区</p>
+                    </div>
+                </div>
+                <div class="help-step">
+                    <span class="help-num">3</span>
+                    <div class="help-text">
+                        <strong>开始翻译</strong>
+                        <p>点击"开始翻译"按钮进行AI翻译</p>
+                    </div>
+                </div>
+                <div class="help-step">
+                    <span class="help-num">4</span>
+                    <div class="help-text">
+                        <strong>编辑文字</strong>
+                        <p>点击画布中的文字可编辑样式、字体、颜色</p>
+                    </div>
+                </div>
+                <div class="help-step">
+                    <span class="help-num">5</span>
+                    <div class="help-text">
+                        <strong>下载结果</strong>
+                        <p>编辑完成后点击保存或批量下载</p>
+                    </div>
+                </div>
+                <div class="help-shortcuts">
+                    <h4>⌨️ 快捷键</h4>
+                    <div class="shortcut-list">
+                        <div><kbd>Ctrl</kbd>+<kbd>Z</kbd> 撤销</div>
+                        <div><kbd>Ctrl</kbd>+<kbd>Y</kbd> 重做</div>
+                        <div><kbd>Delete</kbd> 删除选中</div>
+                        <div><kbd>Ctrl</kbd>+<kbd>A</kbd> 全选</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 加载遮罩 -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-content">
+            <div class="spinner"></div>
+            <p class="loading-text" id="loadingText">正在处理...</p>
+        </div>
+    </div>
+
+    <!-- 历史提示元素 -->
+    <div class="history-tooltip" id="historyTooltip"></div>
+
+    <script src="/static/js/app.js?v=2024-12-20-v22-Rebrand"></script>
+</body>
+
+</html>
