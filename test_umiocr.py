@@ -14,18 +14,36 @@ import io
 import time
 import logging
 import shutil
+import sys
 
 # 修改为清华镜像
 os.environ['HF_ENDPOINT'] = 'https://mirrors.tuna.tsinghua.edu.cn/hugging-face'
 os.environ['HF_HOME'] = './models'  # 设置模型缓存目录
 
-# 配置上传和输出文件夹 - 必须在app初始化之前定义
-UPLOAD_FOLDER = 'uploads'
-OUTPUT_FOLDER = 'outputs'
+# 🔑 PyInstaller 打包兼容：获取正确的基础路径
+def get_base_path():
+    """获取应用的基础路径，兼容开发环境和打包后的EXE"""
+    if getattr(sys, 'frozen', False):
+        # 打包后的EXE环境
+        return sys._MEIPASS
+    else:
+        # 开发环境
+        return os.path.dirname(os.path.abspath(__file__))
+
+BASE_PATH = get_base_path()
+
+# 配置上传和输出文件夹
+# 这些文件夹需要在当前工作目录创建（而不是在打包目录）
+WORK_DIR = os.getcwd() if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+UPLOAD_FOLDER = os.path.join(WORK_DIR, 'uploads')
+OUTPUT_FOLDER = os.path.join(WORK_DIR, 'outputs')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-app = Flask(__name__)
+# 🔑 Flask 初始化时指定模板和静态文件的路径
+app = Flask(__name__, 
+            template_folder=os.path.join(BASE_PATH, 'templates'),
+            static_folder=os.path.join(BASE_PATH, 'static'))
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
 
@@ -79,10 +97,22 @@ class Translator:
 
 @app.route('/')
 def index():
-    # 确保所有目录存在
-    os.makedirs('static/uploads', exist_ok=True)
-    os.makedirs('static/output', exist_ok=True)
+    # 确保所有目录存在（在工作目录下）
+    os.makedirs(os.path.join(WORK_DIR, 'static', 'uploads'), exist_ok=True)
+    os.makedirs(os.path.join(WORK_DIR, 'static', 'output'), exist_ok=True)
     return render_template('test.html')
+
+# 🔑 PyInstaller 兼容：服务 static/uploads 文件夹下的文件
+@app.route('/static/uploads/<path:filename>')
+def serve_uploads(filename):
+    uploads_dir = os.path.join(WORK_DIR, 'static', 'uploads')
+    return send_from_directory(uploads_dir, filename)
+
+# 🔑 PyInstaller 兼容：服务 static/output 文件夹下的文件  
+@app.route('/static/output/<path:filename>')
+def serve_output(filename):
+    output_dir = os.path.join(WORK_DIR, 'static', 'output')
+    return send_from_directory(output_dir, filename)
 
 @app.route('/ocr', methods=['POST'])
 def ocr():
@@ -1705,4 +1735,21 @@ def clear_cache():
         }), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5001) 
+    import webbrowser
+    import threading
+    
+    # 自动打开浏览器
+    def open_browser():
+        import time
+        time.sleep(1.5)  # 等待服务器启动
+        webbrowser.open('http://127.0.0.1:5001')
+    
+    threading.Thread(target=open_browser, daemon=True).start()
+    
+    print("\n" + "="*50)
+    print("   Xobi Image Translator 已启动！")
+    print("   浏览器将自动打开，或手动访问:")
+    print("   http://127.0.0.1:5001")
+    print("="*50 + "\n")
+    
+    app.run(debug=True, port=5001, use_reloader=False)  # 禁用reloader避免重复打开浏览器 

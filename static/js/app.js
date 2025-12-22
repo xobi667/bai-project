@@ -3007,7 +3007,7 @@ function deleteImage(index) {
     }
 }
 
-// 🔑 单张下载功能 - 保存当前画布（精确导出）
+// 🔑 单张下载功能 - 保存当前画布（精确导出，保持原始格式）
 async function downloadImage() {
     console.log('downloadImage() 被调用');
 
@@ -3018,23 +3018,39 @@ async function downloadImage() {
     }
 
     try {
-        // 尝试获取当前图片的原始文件名
+        // 尝试获取当前图片的原始文件名和格式
         let filename = 'image_' + Date.now() + '.png';
+        let mimeType = 'image/png';
+        let quality = 1;
 
-        // 如果在多语言模式，尝试获取原始文件名（保持原名，只改扩展名为png）
+        // 如果在多语言模式，尝试获取原始文件名和格式
         if (appState.translations && appState.currentLang) {
             const langData = appState.translations[appState.currentLang];
             if (langData && langData.images && langData.images[appState.currentIndex]) {
                 const imgObj = langData.images[appState.currentIndex];
                 if (imgObj.originalImg && imgObj.originalImg.file) {
-                    // 🔑 修复：保持原始文件名，只将扩展名改为 .png
-                    filename = imgObj.originalImg.file.name.replace(/\.[^.]+$/, '.png');
+                    const originalName = imgObj.originalImg.file.name;
+                    const ext = originalName.split('.').pop().toLowerCase();
+
+                    // 🔑 保持原始格式
+                    if (ext === 'jpg' || ext === 'jpeg') {
+                        filename = originalName; // 保持原名
+                        mimeType = 'image/jpeg';
+                        quality = 0.95; // JPEG 质量
+                    } else if (ext === 'webp') {
+                        filename = originalName;
+                        mimeType = 'image/webp';
+                        quality = 0.95;
+                    } else {
+                        // 默认 PNG
+                        filename = originalName.replace(/\.[^.]+$/, '.png');
+                        mimeType = 'image/png';
+                    }
                 }
             }
         }
 
         // 🔑 方案：将画布内容绘制到一个2D canvas上导出
-        // 这样可以避免fabric.js的multiplier问题
         const originalWidth = window.originalImageWidth || canvas.getWidth();
         const originalHeight = window.originalImageHeight || canvas.getHeight();
         const scale = originalWidth / canvas.getWidth();
@@ -3044,7 +3060,9 @@ async function downloadImage() {
             canvasHeight: canvas.getHeight(),
             originalWidth: originalWidth,
             originalHeight: originalHeight,
-            scale: scale
+            scale: scale,
+            format: mimeType,
+            filename: filename
         });
 
         // 创建临时2D画布
@@ -3060,8 +3078,8 @@ async function downloadImage() {
         const fabricCanvasElem = canvas.getElement();
         ctx.drawImage(fabricCanvasElem, 0, 0);
 
-        // 导出
-        const dataURL = tempCanvas.toDataURL('image/png');
+        // 🔑 根据原始格式导出
+        const dataURL = tempCanvas.toDataURL(mimeType, quality);
 
         const link = document.createElement('a');
         link.download = filename;
@@ -3415,52 +3433,103 @@ async function syncStylesToAllLangs() {
                             let newScaledWidth = Math.round(neededScaledWidth);
                             const deltaWidth = newScaledWidth - currentScaledWidth;
 
-                            // 🔑 锚点逻辑：根据对齐方式决定扩展方向
-                            if (obj.textAlign === 'right') {
-                                // 右对齐：向左扩展 (保持右边缘不变)
-                                obj.left -= deltaWidth;
-                            } else if (obj.textAlign === 'center') {
-                                // 居中对齐：向两边扩展 (保持中心不变)
-                                obj.left -= deltaWidth / 2;
+                            // 🔑 修复：根据 originX 和 textAlign 决定扩展方向
+                            // originX 决定了 "left" 坐标指的是框的哪个位置
+                            // textAlign 决定了用户期望的视觉对齐方式
+                            const originX = obj.originX || 'left';
+                            const textAlign = obj.textAlign || 'left';
+
+                            // 首先，计算当前框的"视觉左边缘"位置
+                            let visualLeftEdge;
+                            if (originX === 'center') {
+                                visualLeftEdge = oldLeft - (currentScaledWidth / 2);
+                            } else if (originX === 'right') {
+                                visualLeftEdge = oldLeft - currentScaledWidth;
+                            } else { // 'left'
+                                visualLeftEdge = oldLeft;
                             }
-                            // 左对齐：向右扩展 (不需要改left)
+
+                            // 然后，根据 textAlign 决定扩展后框的新位置
+                            // 保持对应边缘不变
+                            if (textAlign === 'right') {
+                                // 右对齐：保持右边缘不变，向左扩展
+                                const visualRightEdge = visualLeftEdge + currentScaledWidth;
+                                const newVisualLeftEdge = visualRightEdge - newScaledWidth;
+                                // 根据 originX 计算新的 left
+                                if (originX === 'center') {
+                                    obj.left = newVisualLeftEdge + (newScaledWidth / 2);
+                                } else if (originX === 'right') {
+                                    obj.left = newVisualLeftEdge + newScaledWidth;
+                                } else {
+                                    obj.left = newVisualLeftEdge;
+                                }
+                            } else if (textAlign === 'center') {
+                                // 居中对齐：保持中心不变，向两边扩展
+                                const visualCenter = visualLeftEdge + (currentScaledWidth / 2);
+                                const newVisualLeftEdge = visualCenter - (newScaledWidth / 2);
+                                if (originX === 'center') {
+                                    obj.left = visualCenter; // 中心不变
+                                } else if (originX === 'right') {
+                                    obj.left = newVisualLeftEdge + newScaledWidth;
+                                } else {
+                                    obj.left = newVisualLeftEdge;
+                                }
+                            } else {
+                                // 左对齐：保持左边缘不变，向右扩展
+                                // 视觉左边缘不变
+                                if (originX === 'center') {
+                                    obj.left = visualLeftEdge + (newScaledWidth / 2);
+                                } else if (originX === 'right') {
+                                    obj.left = visualLeftEdge + newScaledWidth;
+                                } else {
+                                    obj.left = visualLeftEdge; // 不变
+                                }
+                            }
 
                             // 🔑 边界约束：确保文本框渲染后不超出画布左右边界
                             const padding = 15;
                             const maxPossibleScaledWidth = canvasWidth - 2 * padding;
 
+                            // 重新计算当前的视觉左边缘
+                            let currentVisualLeft;
+                            if (originX === 'center') {
+                                currentVisualLeft = obj.left - (newScaledWidth / 2);
+                            } else if (originX === 'right') {
+                                currentVisualLeft = obj.left - newScaledWidth;
+                            } else {
+                                currentVisualLeft = obj.left;
+                            }
+
                             // 1. 宽度强制限制
                             if (newScaledWidth > maxPossibleScaledWidth) {
                                 newScaledWidth = maxPossibleScaledWidth;
-                                // 重新调整位置以适应最大宽度
-                                if (obj.textAlign === 'right') {
-                                    // 靠右边放
-                                    obj.left = canvasWidth - padding - newScaledWidth;
-                                } else if (obj.textAlign === 'center') {
-                                    obj.left = (canvasWidth - newScaledWidth) / 2;
-                                } else {
-                                    obj.left = padding;
-                                }
                             }
 
-                            // 2. 左右边界检查与修正
-                            // 左边界检查
-                            if (obj.left < padding) {
-                                obj.left = padding;
+                            // 2. 左边界检查
+                            if (currentVisualLeft < padding) {
+                                currentVisualLeft = padding;
                             }
-                            // 右边界检查
-                            if (obj.left + newScaledWidth > canvasWidth - padding) {
-                                obj.left = canvasWidth - padding - newScaledWidth;
-                                // 二次检查左边界 (如果因为修正右边界导致左边界溢出)
-                                if (obj.left < padding) {
-                                    obj.left = padding;
-                                    // 最后的手段：缩小宽度
-                                    newScaledWidth = canvasWidth - 2 * padding;
-                                }
+                            // 3. 右边界检查
+                            if (currentVisualLeft + newScaledWidth > canvasWidth - padding) {
+                                currentVisualLeft = canvasWidth - padding - newScaledWidth;
+                            }
+                            // 4. 再次检查左边界
+                            if (currentVisualLeft < padding) {
+                                currentVisualLeft = padding;
+                                newScaledWidth = canvasWidth - 2 * padding;
+                            }
+
+                            // 根据 originX 转换回 obj.left
+                            if (originX === 'center') {
+                                obj.left = currentVisualLeft + (newScaledWidth / 2);
+                            } else if (originX === 'right') {
+                                obj.left = currentVisualLeft + newScaledWidth;
+                            } else {
+                                obj.left = currentVisualLeft;
                             }
 
                             obj.width = newScaledWidth / scaleX;
-                            console.log(`  📐 智能扩展 (${obj.textAlign}): left=${obj.left.toFixed(1)}, width=${obj.width.toFixed(1)}`);
+                            console.log(`  📐 智能扩展 (textAlign=${textAlign}, originX=${originX}): left=${obj.left.toFixed(1)}, width=${obj.width.toFixed(1)}`);
                         }
                     } catch (e) {
                         console.error('测量宽度失败:', e);
@@ -3631,33 +3700,87 @@ async function syncStylesToEverything() {
                                     let newScaledWidth = Math.round(neededScaledWidth);
                                     const deltaWidth = newScaledWidth - currentScaledWidth;
 
-                                    // 🔹 锚点调整
-                                    if (obj.textAlign === 'right') {
-                                        obj.left -= deltaWidth;
-                                    } else if (obj.textAlign === 'center') {
-                                        obj.left -= deltaWidth / 2;
+                                    // 🔑 修复：根据 originX 和 textAlign 决定扩展方向
+                                    const originX = obj.originX || 'left';
+                                    const textAlign = obj.textAlign || 'left';
+
+                                    // 计算当前框的"视觉左边缘"位置
+                                    let visualLeftEdge;
+                                    if (originX === 'center') {
+                                        visualLeftEdge = oldLeft - (currentScaledWidth / 2);
+                                    } else if (originX === 'right') {
+                                        visualLeftEdge = oldLeft - currentScaledWidth;
+                                    } else {
+                                        visualLeftEdge = oldLeft;
+                                    }
+
+                                    // 根据 textAlign 决定扩展后框的新位置
+                                    if (textAlign === 'right') {
+                                        const visualRightEdge = visualLeftEdge + currentScaledWidth;
+                                        const newVisualLeftEdge = visualRightEdge - newScaledWidth;
+                                        if (originX === 'center') {
+                                            obj.left = newVisualLeftEdge + (newScaledWidth / 2);
+                                        } else if (originX === 'right') {
+                                            obj.left = newVisualLeftEdge + newScaledWidth;
+                                        } else {
+                                            obj.left = newVisualLeftEdge;
+                                        }
+                                    } else if (textAlign === 'center') {
+                                        const visualCenter = visualLeftEdge + (currentScaledWidth / 2);
+                                        const newVisualLeftEdge = visualCenter - (newScaledWidth / 2);
+                                        if (originX === 'center') {
+                                            obj.left = visualCenter;
+                                        } else if (originX === 'right') {
+                                            obj.left = newVisualLeftEdge + newScaledWidth;
+                                        } else {
+                                            obj.left = newVisualLeftEdge;
+                                        }
+                                    } else {
+                                        // 左对齐：保持左边缘不变
+                                        if (originX === 'center') {
+                                            obj.left = visualLeftEdge + (newScaledWidth / 2);
+                                        } else if (originX === 'right') {
+                                            obj.left = visualLeftEdge + newScaledWidth;
+                                        } else {
+                                            obj.left = visualLeftEdge;
+                                        }
                                     }
 
                                     // 🧱 边界约束
                                     const padding = 15;
                                     const maxPossibleScaledWidth = canvasWidth - 2 * padding;
 
-                                    // 1. 宽度限制
-                                    if (newScaledWidth > maxPossibleScaledWidth) {
-                                        newScaledWidth = maxPossibleScaledWidth;
-                                        if (obj.textAlign === 'right') obj.left = canvasWidth - padding - newScaledWidth;
-                                        else if (obj.textAlign === 'center') obj.left = (canvasWidth - newScaledWidth) / 2;
-                                        else obj.left = padding;
+                                    // 重新计算视觉左边缘
+                                    let currentVisualLeft;
+                                    if (originX === 'center') {
+                                        currentVisualLeft = obj.left - (newScaledWidth / 2);
+                                    } else if (originX === 'right') {
+                                        currentVisualLeft = obj.left - newScaledWidth;
+                                    } else {
+                                        currentVisualLeft = obj.left;
                                     }
 
-                                    // 2. 只有位置溢出时才推
-                                    if (obj.left < padding) obj.left = padding;
-                                    if (obj.left + newScaledWidth > canvasWidth - padding) {
-                                        obj.left = canvasWidth - padding - newScaledWidth;
-                                        if (obj.left < padding) {
-                                            obj.left = padding;
-                                            newScaledWidth = canvasWidth - 2 * padding;
-                                        }
+                                    if (newScaledWidth > maxPossibleScaledWidth) {
+                                        newScaledWidth = maxPossibleScaledWidth;
+                                    }
+                                    if (currentVisualLeft < padding) {
+                                        currentVisualLeft = padding;
+                                    }
+                                    if (currentVisualLeft + newScaledWidth > canvasWidth - padding) {
+                                        currentVisualLeft = canvasWidth - padding - newScaledWidth;
+                                    }
+                                    if (currentVisualLeft < padding) {
+                                        currentVisualLeft = padding;
+                                        newScaledWidth = canvasWidth - 2 * padding;
+                                    }
+
+                                    // 转换回 obj.left
+                                    if (originX === 'center') {
+                                        obj.left = currentVisualLeft + (newScaledWidth / 2);
+                                    } else if (originX === 'right') {
+                                        obj.left = currentVisualLeft + newScaledWidth;
+                                    } else {
+                                        obj.left = currentVisualLeft;
                                     }
 
                                     obj.width = newScaledWidth / scaleX;

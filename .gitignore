@@ -18,6 +18,11 @@ uploads/
 static/uploads/
 static/debug/
 
+# PyInstaller build output
+build/
+dist/
+*.spec.bak
+
 # Editor
 .vscode/
 .idea/
