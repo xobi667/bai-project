@@ -7,7 +7,8 @@ console.log('🚀 App.js 版本:', APP_VERSION);
 // 全局状态管理
 const appState = {
     images: [], // {id, file, url, status, result, canvasData, thumbnail}
-    currentIndex: -1
+    currentIndex: -1,
+    syncLock: false  // 🔑 同步锁：防止切换语言时覆盖同步后的数据
 };
 
 let canvas = null;
@@ -16,110 +17,107 @@ let currentFilename = 'translated_image.png';
 let selectedObject = null;
 let selectedObjectsArray = null; // 用于存储多选的对象数组
 
-// 操作历史记录
-// 操作历史记录
+// 操作历史记录 - 简化版全局栈
 const history = {
     undoStack: [],
     redoStack: [],
     isPerformingAction: false,
 
-    // 辅助：创建视觉快照防止闪烁
-    takeSnapshot() {
-        if (!canvas) return null;
-        const snapshotCanvas = document.getElementById('snapshotCanvas');
-        if (!snapshotCanvas) return null;
-
-        try {
-            snapshotCanvas.width = canvas.width;
-            snapshotCanvas.height = canvas.height;
-            snapshotCanvas.style.width = canvas.getElement().style.width;
-            snapshotCanvas.style.height = canvas.getElement().style.height;
-            snapshotCanvas.style.display = 'block';
-
-            const ctx = snapshotCanvas.getContext('2d');
-            ctx.clearRect(0, 0, snapshotCanvas.width, snapshotCanvas.height);
-            // 绘制当前内容 (lowerCanvasEl包含了所有非选中物体)
-            if (canvas.lowerCanvasEl) {
-                ctx.drawImage(canvas.lowerCanvasEl, 0, 0);
-            }
-            return snapshotCanvas;
-        } catch (e) {
-            console.error("Snapshot failed:", e);
-            return null;
-        }
-    },
-
-    clearSnapshot() {
-        const snapshotCanvas = document.getElementById('snapshotCanvas');
-        if (snapshotCanvas) {
-            snapshotCanvas.style.display = 'none';
-        }
-    },
-
     saveState() {
         if (this.isPerformingAction) return;
         if (!canvas) return;
 
-        // 保存当前状态到撤销栈
-        const currentState = JSON.stringify(canvas.toJSON(['selectable', 'hasControls']));
-        this.undoStack.push(currentState);
+        // 只保存文本对象
+        const objects = canvas.getObjects().filter(obj => obj.type === 'textbox' || obj.type === 'i-text');
+
+        if (objects.length === 0) {
+            return;
+        }
+
+        // 使用完整的 toJSON 保存所有属性
+        const currentState = canvas.toJSON([
+            'left', 'top', 'width', 'height', 'scaleX', 'scaleY', 'angle',
+            'selectable', 'hasControls', 'fontSize', 'fontFamily', 'fontWeight',
+            'fontStyle', 'fill', 'stroke', 'strokeWidth', 'textAlign', 'charSpacing',
+            'lineHeight', 'text', 'splitByGrapheme', 'breakWords', 'originX', 'originY',
+            'borderColor', 'cornerColor', 'cornerSize', 'transparentCorners', 'padding'
+        ]);
+
+        this.undoStack.push(JSON.stringify(currentState));
+        console.log(`💾 saveState: 保存状态, 栈深度=${this.undoStack.length}`);
 
         // 清空重做栈
         this.redoStack = [];
 
         // 限制历史记录大小
-        if (this.undoStack.length > 50) {
+        if (this.undoStack.length > 30) {
             this.undoStack.shift();
         }
     },
 
     undo() {
-        if (!canvas || this.undoStack.length === 0) return;
+        if (!canvas || this.undoStack.length === 0) {
+            console.log('❌ 无法撤销：栈为空');
+            return;
+        }
 
         this.isPerformingAction = true;
-        this.takeSnapshot(); // 📸 快照遮罩
+        console.log('⬅️ 撤销操作');
 
         // 保存当前状态到重做栈
-        const currentState = JSON.stringify(canvas.toJSON(['selectable', 'hasControls']));
-        this.redoStack.push(currentState);
+        const currentState = canvas.toJSON([
+            'left', 'top', 'width', 'height', 'scaleX', 'scaleY', 'angle',
+            'selectable', 'hasControls', 'fontSize', 'fontFamily', 'fontWeight',
+            'fontStyle', 'fill', 'stroke', 'strokeWidth', 'textAlign', 'charSpacing',
+            'lineHeight', 'text', 'splitByGrapheme', 'breakWords', 'originX', 'originY',
+            'borderColor', 'cornerColor', 'cornerSize', 'transparentCorners', 'padding'
+        ]);
+        this.redoStack.push(JSON.stringify(currentState));
 
         // 恢复前一个状态
         const previousState = this.undoStack.pop();
 
-        // 关键优化：renderOnAddRemove=false 防止逐个添加时重绘
-        const originalRenderOnAddRemove = canvas.renderOnAddRemove;
-        canvas.renderOnAddRemove = false;
-
         canvas.loadFromJSON(previousState, () => {
-            canvas.renderOnAddRemove = originalRenderOnAddRemove;
             canvas.renderAll();
             this.isPerformingAction = false;
-            this.clearSnapshot(); // 🧹 移除遮罩
+            console.log('✅ 撤销完成');
         });
     },
 
     redo() {
-        if (!canvas || this.redoStack.length === 0) return;
+        if (!canvas || this.redoStack.length === 0) {
+            console.log('❌ 无法重做：栈为空');
+            return;
+        }
 
         this.isPerformingAction = true;
-        this.takeSnapshot(); // 📸 快照遮罩
+        console.log('➡️ 重做操作');
 
         // 保存当前状态到撤销栈
-        const currentState = JSON.stringify(canvas.toJSON(['selectable', 'hasControls']));
-        this.undoStack.push(currentState);
+        const currentState = canvas.toJSON([
+            'left', 'top', 'width', 'height', 'scaleX', 'scaleY', 'angle',
+            'selectable', 'hasControls', 'fontSize', 'fontFamily', 'fontWeight',
+            'fontStyle', 'fill', 'stroke', 'strokeWidth', 'textAlign', 'charSpacing',
+            'lineHeight', 'text', 'splitByGrapheme', 'breakWords', 'originX', 'originY',
+            'borderColor', 'cornerColor', 'cornerSize', 'transparentCorners', 'padding'
+        ]);
+        this.undoStack.push(JSON.stringify(currentState));
 
         // 恢复下一个状态
         const nextState = this.redoStack.pop();
 
-        const originalRenderOnAddRemove = canvas.renderOnAddRemove;
-        canvas.renderOnAddRemove = false;
-
         canvas.loadFromJSON(nextState, () => {
-            canvas.renderOnAddRemove = originalRenderOnAddRemove;
             canvas.renderAll();
             this.isPerformingAction = false;
-            this.clearSnapshot(); // 🧹 移除遮罩
+            console.log('✅ 重做完成');
         });
+    },
+
+    // 清除历史（切换语言/图片时调用）
+    clear() {
+        this.undoStack = [];
+        this.redoStack = [];
+        console.log('🧹 历史记录已清空');
     }
 };
 
@@ -183,6 +181,11 @@ document.addEventListener('DOMContentLoaded', function () {
         // Note: Click is NOT added here because uploadZone is a <label for="multi-image-upload">
         // which natively triggers the input on click. Adding JS click causes double-dialog.
 
+        uploadZone.addEventListener('dragenter', (e) => {
+            e.preventDefault();
+            uploadZone.classList.add('dragover');
+        });
+
         uploadZone.addEventListener('dragover', (e) => {
             e.preventDefault();
             uploadZone.classList.add('dragover');
@@ -196,9 +199,8 @@ document.addEventListener('DOMContentLoaded', function () {
             e.preventDefault();
             uploadZone.classList.remove('dragover');
             if (e.dataTransfer.files.length) {
-                // 只设置files，change事件会自动触发handleImageUpload
-                // 不要在这里再次调用handleImageUpload，否则会导致双倍上传
-                fileInput.files = e.dataTransfer.files;
+                // 直接调用处理函数，因为 programmatic 修改 files 不会触发 change 事件
+                handleImageUpload(e.dataTransfer.files);
             }
         });
         console.log('✅ Upload drag/drop handlers bound (click handled natively by label)');
@@ -331,23 +333,136 @@ document.addEventListener('DOMContentLoaded', function () {
                     width: newWidth,
                     left: obj.left + leftAdjust
                 });
+
+                // ========== 🧱 边界限制 (核心修复) ==========
+                const canvasWidth = canvas.getWidth();
+                const padding = 10;
+                const scaledWidth = newWidth * scale; // 渲染后的实际宽度
+                if (obj.left + scaledWidth > canvasWidth - padding) {
+                    obj.left = Math.max(padding, canvasWidth - padding - scaledWidth);
+                    // 如果推到头了仍然超出，缩减内部宽度（触发折行）
+                    if (obj.left + scaledWidth > canvasWidth - padding) {
+                        obj.width = Math.max(50, (canvasWidth - padding - obj.left) / scale);
+                    }
+                }
+                if (obj.left < padding) obj.left = padding;
+
                 obj.setCoords(); // Update bounding box
                 console.log('  → Scaled textbox: fontSize=' + newBaseSize.toFixed(1) + ' (Visual: ' + targetVisualSize + '), width=' + newWidth.toFixed(1));
+                // 🔑 关键修复：多选调整字号时，同时也调整文本框宽度以适应
+                // 否则字变大框不变，文字会换行或消失
+                if (obj.type === 'textbox') {
+                    // 1. 设置新字号
+                    obj.set('fontSize', newBaseSize);
+
+                    // 2. 测量新字号下的自然宽度
+                    // 创建一个临时对象来测量一行到底有多宽
+                    const tempText = new fabric.Textbox(obj.text, {
+                        fontSize: newBaseSize,
+                        fontFamily: obj.fontFamily,
+                        fontWeight: obj.fontWeight,
+                        fontStyle: obj.fontStyle,
+                        scaleX: obj.scaleX,
+                        scaleY: obj.scaleY,
+                        width: 99999 // 足够宽以确保单行
+                    });
+
+                    // 3. 计算适配宽度
+                    // 我们希望保持字号变化后，文本依然是一行(或者原来排版)，所以主要防止意外折行
+                    // 这里我们简单做：如果原来的文字没换行（不包含\n），现在也不要换行
+                    // 使用 includes('\n') 比检查 textLines 更可靠，因为 textLines 可能是滞后的
+                    if (obj.text && !obj.text.includes('\n')) {
+                        const neededWidth = tempText.calcTextWidth() + 15;
+                        const currentScaleX = obj.scaleX || 1;
+                        let newScaledWidth = neededWidth; // 实际需要的渲染宽度
+                        let newLeft = obj.left;
+
+                        const canvasWidth = canvas.width || 800;
+                        const padding = 10;
+
+                        // ========== 🧱 字号调整时的边界防御 ==========
+                        // 1. 如果右边溢出，向左移动
+                        if (newLeft + newScaledWidth > canvasWidth - padding) {
+                            newLeft = canvasWidth - padding - newScaledWidth;
+                        }
+
+                        // 2. 如果左边溢出（因为上面向左移导致，或者是本身就溢出），强制贴左边
+                        if (newLeft < padding) {
+                            newLeft = padding;
+                            // 如果还是放不下，强制缩小宽度
+                            if (newScaledWidth > canvasWidth - 2 * padding) {
+                                newScaledWidth = canvasWidth - 2 * padding;
+                            }
+                        }
+
+                        // 应用新的位置和宽度
+                        obj.set('width', newScaledWidth / currentScaleX);
+                        obj.set('left', newLeft);
+                    }
+                } else {
+                    obj.set('fontSize', newBaseSize);
+                }
+
+                obj.setCoords();
             } else {
                 obj.set('fontSize', newBaseSize);
+                obj.setCoords();
             }
         }
 
-        if (selectedObjectsArray && selectedObjectsArray.length > 0) {
-            selectedObjectsArray.forEach(scaleTextbox);
+
+
+        // 🔑 恢复执行逻辑：遍历选中对象并应用缩放
+        // 优先使用当前画布的选中对象，比全局变量更可靠
+        // ⚠️ 关键步骤：先获取对象，然后【立即解除组合】。
+        // 为什么？因为在 ActiveSelection 中，对象的 left/top 是相对于组中心的。
+        // 我们的边界检查逻辑依赖于绝对坐标 (canvas 坐标)。
+        // 如果不解除组合，boundary check 会失效，导致文字飞出画布。
+
+        let targets = canvas.getActiveObjects().filter(o => o.type === 'textbox' || o.type === 'i-text');
+
+        // 如果没有获取到（可能因为各种原因），尝试使用全局变量
+        if (targets.length === 0 && selectedObjectsArray && selectedObjectsArray.length > 0) {
+            targets = selectedObjectsArray;
+        } else if (targets.length === 0 && selectedObject) {
+            targets = [selectedObject];
+        }
+
+        if (targets.length > 0) {
+            // 标记开始刷新，防止 UI 闪烁/隐藏
+            window.isRefreshingSelection = true;
+
+            // 1. 如果当前有选区，先解散，让所有对象回归绝对坐标
+            if (canvas.getActiveObject()) {
+                canvas.discardActiveObject();
+            }
+
+            // 2. 在绝对坐标系下应用缩放和边界检查
+            targets.forEach(obj => {
+                // 确保 objCoords 更新
+                obj.setCoords();
+                scaleTextbox(obj);
+            });
+
+            // 3. 重新创建选区 (恢复多选状态)
+            if (targets.length > 1) {
+                const newSel = new fabric.ActiveSelection(targets, {
+                    canvas: canvas,
+                    borderColor: '#a855f7',
+                    cornerColor: '#a855f7',
+                    cornerSize: 10,
+                    transparentCorners: false
+                });
+                canvas.setActiveObject(newSel);
+            } else if (targets.length === 1) {
+                canvas.setActiveObject(targets[0]);
+            }
+
+            // 4. 完成
+            window.isRefreshingSelection = false;
+
             if (canvas) canvas.renderAll();
             history.saveState();
-        } else if (selectedObject && (selectedObject.type === 'textbox' || selectedObject.type === 'i-text')) {
-            scaleTextbox(selectedObject);
-            if (canvas) canvas.renderAll();
-            history.saveState();
-        } else {
-            console.log('  ⚠️ No valid selection for font size!');
         }
     }
 
@@ -531,16 +646,8 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // 绑定新增文本按钮
-    const addTextBtn = document.getElementById('add-text-btn');
-    if (addTextBtn) {
-        addTextBtn.addEventListener('click', addManualTextbox);
-        console.log('✅ Bind Add Text Button');
-    }
-
     // 绑定样式按钮 (with null checks and debug logging)
     const toggleBoldBtn = document.getElementById('toggle-bold');
-    console.log('🔧 Bold button found:', toggleBoldBtn);
     if (toggleBoldBtn) toggleBoldBtn.addEventListener('click', function () {
         console.log('🔵 Bold button clicked!');
         console.log('  selectedObject:', selectedObject);
@@ -624,52 +731,85 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     // ========== 画布对齐功能 (PS式) ==========
+    // ========== 画布对齐功能 (PS式 - 终极修复) ==========
     function alignToCanvas(direction) {
         if (!canvas) return;
-        const objects = canvas.getActiveObjects();
+
+        // 1. 获取选中的对象
+        // 注意：如果是多选(ActiveSelection)，这些对象的left/top是相对于组中心的
+        let objects = canvas.getActiveObjects();
         if (objects.length === 0) return;
+
+        // 2. 🚨 关键修复：必需先解散组，将对象坐标还原为画布绝对坐标
+        // 否则直接设置 left/top 会被解释为相对坐标，导致飞出画布
+        if (canvas.getActiveObject() && canvas.getActiveObject().type === 'activeSelection') {
+            canvas.discardActiveObject();
+        }
 
         const canvasWidth = canvas.getWidth();
         const canvasHeight = canvas.getHeight();
+        const padding = 10;
 
         objects.forEach(obj => {
+            // 此时 obj.left / obj.top 这里的 obj 已经是独立对象，坐标是绝对坐标
             const objWidth = obj.getScaledWidth();
             const objHeight = obj.getScaledHeight();
 
+            let targetLeft = null;
+            let targetTop = null;
+
+            // 3. 计算目标绝对坐标
             switch (direction) {
                 case 'h-left':
-                    obj.set('left', 0);
+                    targetLeft = padding;
                     break;
                 case 'h-center':
-                    obj.set('left', (canvasWidth - objWidth) / 2);
+                    targetLeft = (canvasWidth - objWidth) / 2;
                     break;
                 case 'h-right':
-                    obj.set('left', canvasWidth - objWidth);
+                    targetLeft = canvasWidth - objWidth - padding;
                     break;
                 case 'v-top':
-                    obj.set('top', 0);
+                    targetTop = padding;
                     break;
                 case 'v-center':
-                    obj.set('top', (canvasHeight - objHeight) / 2);
+                    targetTop = (canvasHeight - objHeight) / 2;
                     break;
                 case 'v-bottom':
-                    obj.set('top', canvasHeight - objHeight);
+                    targetTop = canvasHeight - objHeight - padding;
                     break;
             }
+
+            // 4. 应用坐标 (考虑 origin)
+            if (targetLeft !== null) {
+                if (obj.originX === 'center') {
+                    obj.set('left', targetLeft + objWidth / 2);
+                } else if (obj.originX === 'right') {
+                    obj.set('left', targetLeft + objWidth);
+                } else {
+                    obj.set('left', targetLeft);
+                }
+            }
+
+            if (targetTop !== null) {
+                if (obj.originY === 'center') {
+                    obj.set('top', targetTop + objHeight / 2);
+                } else if (obj.originY === 'bottom') {
+                    obj.set('top', targetTop + objHeight);
+                } else {
+                    obj.set('top', targetTop);
+                }
+            }
+
             obj.setCoords();
         });
 
-        // 🔑 刷新活动选择组的边界框
-        const activeSelection = canvas.getActiveObject();
-        if (activeSelection && activeSelection.type === 'activeSelection') {
-            activeSelection.setCoords();
-            // 强制重新计算选择组边界
-            canvas.discardActiveObject();
-            const sel = new fabric.ActiveSelection(objects, { canvas: canvas });
-            canvas.setActiveObject(sel);
-        }
+        // 5. 恢复选中状态 (为了用户体验)
+        // 使用新坐标重新创建选区
+        const sel = new fabric.ActiveSelection(objects, { canvas: canvas });
+        canvas.setActiveObject(sel);
 
-        canvas.renderAll();
+        canvas.requestRenderAll();
         history.saveState();
     }
 
@@ -770,6 +910,19 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    // 🔑 绑定顶部"新增文本"按钮
+    const addTextBtnTop = document.getElementById('add-text-btn-top');
+    if (addTextBtnTop) {
+        addTextBtnTop.addEventListener('click', function () {
+            if (typeof addManualTextbox === 'function') {
+                addManualTextbox();
+            } else {
+                alert('请先上传并翻译图片');
+            }
+        });
+        console.log('✅ Bind Add Text Top Button');
+    }
+
     // ========== 右侧面板切换逻辑 ==========
     // 显示编辑面板或下载面板
     window.showRightPanel = function (type) {
@@ -806,10 +959,28 @@ function initCanvas() {
     canvas = new fabric.Canvas('fabricCanvas', {
         preserveObjectStacking: true,
         selection: true,
-        selectionColor: 'rgba(155, 109, 255, 0.15)',
-        selectionLineWidth: 1,
-        selectionBorderColor: 'rgba(155, 109, 255, 0.5)',
+        selectionColor: 'rgba(168, 85, 247, 0.15)', // 紫色背景
+        selectionLineWidth: 1.5,
+        selectionBorderColor: '#a855f7', // 紫色边框
         backgroundColor: 'transparent'
+    });
+
+    // ========== 全局样式覆盖 (彻底紫色化) ==========
+    fabric.Object.prototype.set({
+        borderColor: '#a855f7',
+        cornerColor: '#a855f7',
+        cornerSize: 10,
+        transparentCorners: false,
+        selectionBackgroundColor: 'rgba(168, 85, 247, 0.1)'
+    });
+
+    // 专门针对多选框的样式
+    fabric.ActiveSelection.prototype.set({
+        borderColor: '#a855f7',
+        cornerColor: '#a855f7',
+        cornerSize: 10,
+        transparentCorners: false,
+        selectionBackgroundColor: 'rgba(168, 85, 247, 0.1)'
     });
 
     // ========== 智能吸附系统（优化版） ==========
@@ -857,23 +1028,14 @@ function initCanvas() {
         const objRight = objLeft + objWidth;
         const objBottom = objTop + objHeight;
 
-        // ========== 画布居中吸附（只有中心线）==========
+        // ========== 画布吸附 (仅上下居中) ==========
         const canvasCenterX = canvasWidth / 2;
         const canvasCenterY = canvasHeight / 2;
 
         let snappedX = false;
         let snappedY = false;
 
-        // 画布水平中心吸附
-        if (Math.abs(objCenterX - canvasCenterX) < SNAP_THRESHOLD) {
-            obj.set('left', canvasCenterX - objWidth / 2);
-            const line = createSnapLine([canvasCenterX, 0, canvasCenterX, canvasHeight], '#00ff88');
-            canvas.add(line);
-            verticalLines.push(line);
-            snappedX = true;
-        }
-
-        // 画布垂直中心吸附
+        // 画布垂直居中吸附 (Y轴) - 用户点名保留
         if (Math.abs(objCenterY - canvasCenterY) < SNAP_THRESHOLD) {
             obj.set('top', canvasCenterY - objHeight / 2);
             const line = createSnapLine([0, canvasCenterY, canvasWidth, canvasCenterY], '#00ff88');
@@ -896,7 +1058,7 @@ function initCanvas() {
             const otherRight = otherLeft + otherWidth;
             const otherBottom = otherTop + otherHeight;
 
-            // X轴吸附（垂直对齐）- 只在未被画布吸附时检查
+            // X轴吸附（垂直对齐）- 文字对齐吸附
             if (!snappedX) {
                 // 左边对齐左边
                 if (Math.abs(objLeft - otherLeft) < SNAP_THRESHOLD) {
@@ -922,25 +1084,9 @@ function initCanvas() {
                     verticalLines.push(line);
                     snappedX = true;
                 }
-                // 左边对齐右边
-                else if (Math.abs(objLeft - otherRight) < SNAP_THRESHOLD) {
-                    obj.set('left', otherRight);
-                    const line = createSnapLine([otherRight, Math.min(objTop, otherTop), otherRight, Math.max(objBottom, otherBottom)], '#ffaa00');
-                    canvas.add(line);
-                    verticalLines.push(line);
-                    snappedX = true;
-                }
-                // 右边对齐左边
-                else if (Math.abs(objRight - otherLeft) < SNAP_THRESHOLD) {
-                    obj.set('left', otherLeft - objWidth);
-                    const line = createSnapLine([otherLeft, Math.min(objTop, otherTop), otherLeft, Math.max(objBottom, otherBottom)], '#ffaa00');
-                    canvas.add(line);
-                    verticalLines.push(line);
-                    snappedX = true;
-                }
             }
 
-            // Y轴吸附（水平对齐）- 只在未被画布吸附时检查
+            // Y轴吸附（水平对齐）- 文字对齐吸附
             if (!snappedY) {
                 // 顶部对齐顶部
                 if (Math.abs(objTop - otherTop) < SNAP_THRESHOLD) {
@@ -966,24 +1112,38 @@ function initCanvas() {
                     horizontalLines.push(line);
                     snappedY = true;
                 }
-                // 顶部对齐底部
-                else if (Math.abs(objTop - otherBottom) < SNAP_THRESHOLD) {
-                    obj.set('top', otherBottom);
-                    const line = createSnapLine([Math.min(objLeft, otherLeft), otherBottom, Math.max(objRight, otherRight), otherBottom], '#ffaa00');
-                    canvas.add(line);
-                    horizontalLines.push(line);
-                    snappedY = true;
-                }
-                // 底部对齐顶部
-                else if (Math.abs(objBottom - otherTop) < SNAP_THRESHOLD) {
-                    obj.set('top', otherTop - objHeight);
-                    const line = createSnapLine([Math.min(objLeft, otherLeft), otherTop, Math.max(objRight, otherRight), otherTop], '#ffaa00');
-                    canvas.add(line);
-                    horizontalLines.push(line);
-                    snappedY = true;
-                }
             }
         });
+
+        // ========== 🧱 强制边界限制 (核心修复) ==========
+        const padding = 10;
+        // 限制左边
+        if (obj.left < padding) {
+            obj.set('left', padding);
+        }
+        // 限制顶边
+        if (obj.top < padding) {
+            obj.set('top', padding);
+        }
+        // 限制右边
+        if (obj.left + objWidth > canvasWidth - padding) {
+            // 如果宽度已经在限制范围内，限制位移
+            if (objWidth <= canvasWidth - 2 * padding) {
+                obj.set('left', canvasWidth - objWidth - padding);
+            } else {
+                // 如果宽度太大，靠左对齐并强制缩减宽度 (这种情况通常发生在同步长文本时)
+                obj.set('left', padding);
+                obj.set('width', (canvasWidth - 2 * padding) / obj.scaleX);
+            }
+        }
+        // 限制底边
+        if (obj.top + objHeight > canvasHeight - padding) {
+            if (objHeight <= canvasHeight - 2 * padding) {
+                obj.set('top', canvasHeight - objHeight - padding);
+            } else {
+                obj.set('top', padding);
+            }
+        }
 
         obj.setCoords();
     });
@@ -1027,6 +1187,9 @@ function initCanvas() {
     });
 
     canvas.on('selection:cleared', function () {
+        // 🔑 关键修复：如果是代码触发的刷新选区，不要隐藏面板
+        if (window.isRefreshingSelection) return;
+
         document.getElementById('text-style-editor').style.display = 'none';
         selectedObject = null;
         selectedObjectsArray = null;
@@ -1374,8 +1537,32 @@ function renderLangTabs(langs) {
 // 🔑 切换语言版本
 function switchLang(langCode) {
     if (!appState.translations[langCode]) return;
+
+    // 🔑 关键修复：切换前先保存当前画布状态！
+    // 但如果有同步锁，不要保存（避免覆盖同步后的数据）
+    if (canvas && appState.currentLang && appState.currentIndex >= 0 && !appState.syncLock) {
+        const currentLangData = appState.translations[appState.currentLang];
+        if (currentLangData && currentLangData.images[appState.currentIndex]) {
+            currentLangData.images[appState.currentIndex].canvasData = canvas.toJSON([
+                'left', 'top', 'width', 'height', 'scaleX', 'scaleY', 'angle',
+                'selectable', 'hasControls', 'originalStyle', 'padding', 'borderColor',
+                'cornerColor', 'cornerSize', 'transparentCorners', 'splitByGrapheme',
+                'breakWords', 'lockScalingFlip', 'fontSize', 'fontFamily', 'fontWeight',
+                'fontStyle', 'fill', 'stroke', 'strokeWidth', 'textAlign', 'charSpacing', 'lineHeight'
+            ]);
+            console.log('✅ 切换语言前保存画布状态:', appState.currentLang, appState.currentIndex);
+        }
+    } else if (appState.syncLock) {
+        console.log('🔒 同步锁激活，跳过保存当前画布状态');
+    }
+
     appState.currentLang = langCode;
     appState.currentIndex = 0;
+
+    // 🔑 切换语言时清空撤销历史（防止撤销到其他语言的状态）
+    if (history && typeof history.clear === 'function') {
+        history.clear();
+    }
 
     // 重新渲染标签和缩略图
     const selectedLangs = Object.keys(appState.translations).map(code => ({
@@ -1387,11 +1574,18 @@ function switchLang(langCode) {
 
     // 加载第一张该语言的图片
     if (appState.translations[langCode].images.length > 0) {
+        // 🔑 调试：检查目标语言的 canvasData 状态
+        const targetImg = appState.translations[langCode].images[0];
+        console.log(`🔍 切换到 ${langCode}，目标图片 canvasData:`, {
+            hasData: !!targetImg?.canvasData,
+            objectsCount: targetImg?.canvasData?.objects?.length || 0,
+            firstText: targetImg?.canvasData?.objects?.[0]?.text?.substring(0, 30)
+        });
         loadMultiLangImageToCanvas(langCode, 0);
     }
 }
 
-// 🔑 加载多语言版本图片到画布
+// 🔑 加载多语言版本图片到画布 - 优化版
 async function loadMultiLangImageToCanvas(langCode, index) {
     const langData = appState.translations[langCode];
     if (!langData || !langData.images[index]) return;
@@ -1403,59 +1597,106 @@ async function loadMultiLangImageToCanvas(langCode, index) {
     const canvasContainer = document.getElementById('fabricCanvasContainer');
     canvasContainer.style.display = 'block';
 
-    // 🔑 关键修复: 先获取原图尺寸，loadImageToCanvas依赖这些值
+    // 🔑 设置原图预览
     const originalPreview = document.getElementById('original-preview');
     if (originalPreview && imgObj.originalImg) {
         originalPreview.src = imgObj.originalImg.url;
-        originalPreview.style.display = 'block'; // 显示图片
+        originalPreview.style.display = 'block';
     }
 
-    // 等待原图加载并获取尺寸
-    await new Promise((resolve) => {
-        const tempImg = new Image();
-        tempImg.onload = function () {
-            window.originalImageWidth = this.width;
-            window.originalImageHeight = this.height;
-            console.log(`设置原图尺寸: ${this.width}x${this.height} for ${imgObj.originalImg?.file?.name}`);
-            resolve();
-        };
-        tempImg.onerror = () => resolve();
-        tempImg.src = imgObj.originalImg ? imgObj.originalImg.url : data.inpainted_url;
-    });
-
-    initCanvas();
+    // 获取原图尺寸（用于正确缩放）
     const bgImageUrl = data.inpainted_url;
     if (!bgImageUrl) {
         console.error("未收到处理后的图像URL");
         return;
     }
 
-    await loadImageToCanvas(bgImageUrl);
+    // 🔑 性能优化：预加载图片尺寸
+    const imgDimensions = await new Promise((resolve) => {
+        const tempImg = new Image();
+        tempImg.onload = function () {
+            resolve({ width: this.width, height: this.height });
+        };
+        tempImg.onerror = () => resolve({ width: 800, height: 600 });
+        tempImg.src = imgObj.originalImg ? imgObj.originalImg.url : bgImageUrl;
+    });
 
-    // 🔑 关键修复：优先使用保存的画布状态（包含用户的样式修改）
-    // 🔑 关键修复：优先使用保存的画布状态（包含用户的样式修改）
-    if (imgObj.canvasData) {
+    window.originalImageWidth = imgDimensions.width;
+    window.originalImageHeight = imgDimensions.height;
+
+    // 🔑 性能优化：只有在必要时初始化画布
+    initCanvas();
+
+    // 🔑 关键优化：禁用逐个渲染，所有操作完成后一次性渲染
+    if (canvas) {
+        canvas.renderOnAddRemove = false;
+    }
+
+    // 🔑 检查是否有有效的已保存画布状态
+    const hasValidCanvasData = imgObj.canvasData &&
+        imgObj.canvasData.objects &&
+        imgObj.canvasData.objects.length > 0;
+
+    console.log(`🔍 ${langCode} canvasData 检查:`, {
+        hasCanvasData: !!imgObj.canvasData,
+        hasObjects: !!imgObj.canvasData?.objects,
+        objectsLength: imgObj.canvasData?.objects?.length || 0,
+        isValid: hasValidCanvasData
+    });
+
+    if (hasValidCanvasData) {
         console.log("🔄 恢复已保存的画布状态...", langCode, index);
-        // 使用 Promise 等待恢复完成
+        // 显示所有文本框的字号
+        const allFontSizes = imgObj.canvasData.objects
+            .filter(o => o.type === 'textbox')
+            .map(o => o.fontSize);
+        console.log(`📦 canvasData 详情: fontSizes=[${allFontSizes.join(', ')}]`);
+
+        // 🔑 先加载背景
+        await loadImageToCanvas(bgImageUrl);
+
+        // 从保存的数据中恢复文字对象
         await new Promise((resolve) => {
-            canvas.loadFromJSON(imgObj.canvasData, function () {
-                // 🚨 必须重新设置背景！loadFromJSON可能会覆盖或丢失背景设置
-                console.log("🔄 强制重载背景以防止黑屏...");
-                loadImageToCanvas(bgImageUrl).then(() => {
-                    canvas.renderAll();
-                    console.log("✅ 画布状态与背景完全恢复");
-                    resolve();
+            const savedObjects = imgObj.canvasData.objects;
+
+            // 清除当前所有非背景对象
+            const objectsToRemove = canvas.getObjects().filter(obj => obj !== canvas.backgroundImage);
+            objectsToRemove.forEach(obj => canvas.remove(obj));
+            console.log(`🗑️ 已清除 ${objectsToRemove.length} 个旧对象`);
+
+            // 从JSON恢复对象
+            fabric.util.enlivenObjects(savedObjects, function (enlivenedObjects) {
+                console.log(`✨ 反序列化了 ${enlivenedObjects.length} 个对象`);
+                enlivenedObjects.forEach((obj, i) => {
+                    console.log(`  对象${i}: fontSize=${obj.fontSize}, fill=${obj.fill}, text=${obj.text?.substring(0, 20)}`);
+                    // 🔑 强制覆盖颜色样式为紫色 (以防加载的是旧数据)
+                    if (obj.type === 'textbox' || obj.type === 'i-text') {
+                        obj.set({
+                            borderColor: '#a855f7',
+                            cornerColor: '#a855f7',
+                            cornerSize: 10,
+                            transparentCorners: false
+                        });
+                    }
+                    canvas.add(obj);
                 });
+                canvas.renderOnAddRemove = true;
+                canvas.renderAll();
+                console.log("✅ 画布状态恢复完成");
+                resolve();
             });
         });
     } else {
-        // 如果没有保存的状态，则首次绘制文本
+        // 首次加载或无效数据：设置背景并绘制文本
+        console.log("📝 首次加载，绘制默认文本...", langCode, index);
+        await loadImageToCanvas(bgImageUrl);
         if (data.text_positions && data.text_positions.length > 0 && data.translations) {
             drawTextBoxes(data.text_positions, data.translations);
         }
+        canvas.renderOnAddRemove = true;
     }
 
-    // 强制背景颜色为黑色，防止透明导致的显示问题
+    // 确保背景不透明
     canvas.backgroundColor = "#000";
     canvas.renderAll();
 
@@ -1465,20 +1706,24 @@ async function loadMultiLangImageToCanvas(langCode, index) {
     if (textStyleEditor) textStyleEditor.style.display = 'block';
     if (savePanel) savePanel.style.display = 'block';
 
-    // 🔑 隐藏结果区域的空状态占位符
+    // 隐藏结果区域的空状态占位符
     const resultEmpty = document.getElementById('result-empty');
     if (resultEmpty) resultEmpty.style.display = 'none';
 
-    saveInitialState();
-
-    // 🔑 关键修复: 立即保存画布状态，确保批量下载时有正确的数据
-    // 即使用户不点击缩略图切换，也能保存正确的文字排版
-    if (canvas && imgObj) {
-        imgObj.canvasData = canvas.toJSON();
+    // 🔑 只在首次加载时保存初始状态（避免覆盖用户修改）
+    if (!imgObj.canvasData) {
+        saveInitialState();
+        imgObj.canvasData = canvas.toJSON([
+            'left', 'top', 'width', 'height', 'scaleX', 'scaleY', 'angle',
+            'selectable', 'hasControls', 'originalStyle', 'padding', 'borderColor',
+            'cornerColor', 'cornerSize', 'transparentCorners', 'splitByGrapheme',
+            'breakWords', 'lockScalingFlip', 'fontSize', 'fontFamily', 'fontWeight',
+            'fontStyle', 'fill', 'stroke', 'strokeWidth', 'textAlign', 'charSpacing', 'lineHeight'
+        ]);
         console.log('✅ 初始画布状态已保存:', langCode, index);
     }
 
-    // 🔑 自动选中第一个文本框 (优化体验 - 多语言模式)
+    // 自动选中第一个文本框
     if (canvas) {
         const texts = canvas.getObjects('textbox');
         if (texts && texts.length > 0) {
@@ -1507,15 +1752,28 @@ function renderMultiLangThumbnails() {
 
         if (imgObj.status === 'done') {
             div.onclick = () => {
-                // 🔑 切换前保存当前画布状态
-                if (canvas && appState.currentLang && appState.currentIndex >= 0) {
+                // 🔑 切换前保存当前画布状态（包含完整属性）
+                // 但如果有同步锁，不要保存（避免覆盖同步后的数据）
+                if (canvas && appState.currentLang && appState.currentIndex >= 0 && !appState.syncLock) {
                     const currentLangData = appState.translations[appState.currentLang];
                     if (currentLangData && currentLangData.images[appState.currentIndex]) {
-                        currentLangData.images[appState.currentIndex].canvasData = canvas.toJSON();
+                        currentLangData.images[appState.currentIndex].canvasData = canvas.toJSON([
+                            'left', 'top', 'width', 'height', 'scaleX', 'scaleY', 'angle',
+                            'selectable', 'hasControls', 'originalStyle', 'padding', 'borderColor',
+                            'cornerColor', 'cornerSize', 'transparentCorners', 'splitByGrapheme',
+                            'breakWords', 'lockScalingFlip', 'fontSize', 'fontFamily', 'fontWeight',
+                            'fontStyle', 'fill', 'stroke', 'strokeWidth', 'textAlign', 'charSpacing', 'lineHeight'
+                        ]);
                         console.log('✅ 保存画布状态:', appState.currentLang, appState.currentIndex);
                     }
+                } else if (appState.syncLock) {
+                    console.log('🔒 同步锁激活，跳过保存当前画布状态');
                 }
                 appState.currentIndex = index;
+                // 🔑 切换图片时清空撤销历史
+                if (history && typeof history.clear === 'function') {
+                    history.clear();
+                }
                 loadMultiLangImageToCanvas(langCode, index);
                 renderMultiLangThumbnails();
             };
@@ -1852,12 +2110,24 @@ function addManualTextbox() {
     // 获取中心点
     const center = canvas.getCenter();
 
-    // 创建文本对象
-    const textObj = new fabric.Textbox('点击输入文字', {
+    // 创建文本对象 - 宽度会自动适应文字长度
+    const defaultText = '点击输入文字';
+    const defaultFontSize = 40;
+
+    // 测量默认文本需要的宽度
+    const tempText = new fabric.Textbox(defaultText, {
+        fontSize: defaultFontSize,
+        fontFamily: 'Arial',
+        fontWeight: 'bold',
+        width: 99999
+    });
+    const autoWidth = Math.max(tempText.calcTextWidth() + 30, 150); // 最小150px
+
+    const textObj = new fabric.Textbox(defaultText, {
         left: center.left,
         top: center.top,
-        width: 300,
-        fontSize: 40,
+        width: autoWidth,
+        fontSize: defaultFontSize,
         fill: '#ff0000', // 默认红色显眼
         textAlign: 'center',
         originX: 'center',
@@ -1865,8 +2135,8 @@ function addManualTextbox() {
         fontFamily: 'Arial',
         fontWeight: 'bold',
         padding: 10,
-        borderColor: '#9b6dff',
-        cornerColor: '#9b6dff',
+        borderColor: '#a855f7',
+        cornerColor: '#a855f7',
         cornerSize: 10,
         transparentCorners: false,
         selectable: true,
@@ -1874,6 +2144,25 @@ function addManualTextbox() {
         splitByGrapheme: true,
         breakWords: true
     });
+
+    // ========== 🧱 边缘生成检查 ==========
+    const padding = 20;
+    const canvasWidth = canvas.width;
+    const canvasHeight = canvas.height;
+    const objWidth = textObj.width;
+    const objHeight = textObj.height;
+
+    // 确保中心点不至于让边缘出界
+    if (textObj.left - objWidth / 2 < padding) textObj.left = objWidth / 2 + padding;
+    if (textObj.left + objWidth / 2 > canvasWidth - padding) textObj.left = canvasWidth - objWidth / 2 - padding;
+    if (textObj.top - objHeight / 2 < padding) textObj.top = objHeight / 2 + padding;
+    if (textObj.top + objHeight / 2 > canvasHeight - padding) textObj.top = canvasHeight - objHeight / 2 - padding;
+
+    // 如果文本框本身就比画布宽，强制缩小
+    if (objWidth > canvasWidth - 2 * padding) {
+        textObj.width = canvasWidth - 2 * padding;
+        textObj.left = canvasWidth / 2;
+    }
 
     // 应用渲染模式
     applyRenderModeToText(textObj);
@@ -1885,6 +2174,7 @@ function addManualTextbox() {
 
     console.log("已添加手动文本框");
 }
+window.addTextToCanvas = addManualTextbox;
 
 // 🔑 通用文本框创建函数 - 确保屏幕显示和离屏生成的一致性
 function addTextboxToCanvas(targetCanvas, item, translatedText, index) {
@@ -1936,9 +2226,9 @@ function addTextboxToCanvas(targetCanvas, item, translatedText, index) {
         originX: 'left',
         originY: 'top',
         padding: 0,
-        borderColor: 'rgba(155, 109, 255, 0.8)',
-        cornerColor: 'rgba(155, 109, 255, 0.8)',
-        cornerSize: 8,
+        borderColor: '#a855f7',
+        cornerColor: '#a855f7',
+        cornerSize: 10,
         transparentCorners: false,
         selectable: true,
         editable: true,
@@ -2729,15 +3019,16 @@ async function downloadImage() {
 
     try {
         // 尝试获取当前图片的原始文件名
-        let filename = 'translated_image_' + Date.now() + '.png';
+        let filename = 'image_' + Date.now() + '.png';
 
-        // 如果在多语言模式，尝试获取原始文件名
+        // 如果在多语言模式，尝试获取原始文件名（保持原名，只改扩展名为png）
         if (appState.translations && appState.currentLang) {
             const langData = appState.translations[appState.currentLang];
             if (langData && langData.images && langData.images[appState.currentIndex]) {
                 const imgObj = langData.images[appState.currentIndex];
                 if (imgObj.originalImg && imgObj.originalImg.file) {
-                    filename = imgObj.originalImg.file.name.replace(/\.[^.]+$/, '_translated.png');
+                    // 🔑 修复：保持原始文件名，只将扩展名改为 .png
+                    filename = imgObj.originalImg.file.name.replace(/\.[^.]+$/, '.png');
                 }
             }
         }
@@ -2899,21 +3190,544 @@ async function downloadAllImages() {
     }
 }
 
+// 直接下载功能 - 不打包成ZIP，直接触发多次浏览器下载
+async function downloadDirectly() {
+    console.log('downloadDirectly() 被调用');
+
+    const hasMultiLang = appState.translations && Object.keys(appState.translations).length > 0;
+
+    // 保存当前状态
+    if (canvas && appState.currentLang && appState.currentIndex >= 0) {
+        const currentLangData = appState.translations[appState.currentLang];
+        if (currentLangData && currentLangData.images[appState.currentIndex]) {
+            currentLangData.images[appState.currentIndex].canvasData = canvas.toJSON();
+        }
+    }
+
+    if (!hasMultiLang) {
+        const processedImages = appState.images.filter(img => img.status === 'done');
+        if (processedImages.length === 0) {
+            alert("没有已完成处理的图片可供下载");
+            return;
+        }
+    }
+
+    const btn = document.getElementById('download-direct-btn');
+    if (!btn) return;
+    const originalText = btn.innerHTML;
+    btn.innerHTML = '<span>🚀 正在下载...</span>';
+    btn.disabled = true;
+
+    try {
+        let exportedImages = [];
+
+        if (hasMultiLang) {
+            const langCodes = Object.keys(appState.translations);
+            for (const langCode of langCodes) {
+                const langData = appState.translations[langCode];
+                const doneImages = langData.images.filter(img => img.status === 'done');
+                for (const imgObj of doneImages) {
+                    const fileName = imgObj.originalImg ? imgObj.originalImg.file.name.replace(/\.[^.]+$/, `_${langCode}.png`) : `image_${langCode}.png`;
+                    exportedImages.push({ imgObj, fileName });
+                }
+            }
+        } else {
+            const processedImages = appState.images.filter(img => img.status === 'done');
+            processedImages.forEach((img, i) => {
+                exportedImages.push({ imgObj: img, fileName: img.file.name });
+            });
+        }
+
+        if (exportedImages.length === 0) {
+            alert("没有已完成处理的图片可供下载");
+            return;
+        }
+
+        if (exportedImages.length > 5 && !confirm(`即将直接下载 ${exportedImages.length} 张图片，浏览器可能会弹出多次提示，是否继续？`)) {
+            return;
+        }
+
+        for (let i = 0; i < exportedImages.length; i++) {
+            const { imgObj, fileName } = exportedImages[i];
+            btn.innerHTML = `<span>下载中 ${i + 1}/${exportedImages.length}</span>`;
+
+            try {
+                const dataURL = await exportImageOffscreen(imgObj);
+                if (dataURL) {
+                    const link = document.createElement('a');
+                    link.href = dataURL;
+                    link.download = fileName;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    // 增加小延迟防止浏览器拦截
+                    await new Promise(r => setTimeout(r, 400));
+                }
+            } catch (e) {
+                console.error("单个下载失败", fileName, e);
+            }
+        }
+    } catch (e) {
+        alert("直接下载失败: " + e.message);
+        console.error(e);
+    } finally {
+        btn.innerHTML = originalText;
+        btn.disabled = false;
+    }
+}
+
+
 // 注意: 批量下载按钮在HTML中已用onclick绑定，这里不再重复绑定
 // 否则会触发两次下载
 
-// 🔑 渲染多语言下载按钮
-function renderDownloadButtons() {
-    const container = document.getElementById('multi-lang-downloads');
-    const btnsDiv = document.getElementById('lang-download-btns');
 
-    if (!appState.translations || Object.keys(appState.translations).length === 0) {
-        container.style.display = 'none';
+// 🔑 同步样式到所有语言（当前图片）
+async function syncStylesToAllLangs() {
+    console.log('syncStylesToAllLangs() 被调用');
+
+    // 🔑 调试：打印所有语言的状态
+    console.log('📊 所有语言状态:');
+    Object.keys(appState.translations || {}).forEach(lang => {
+        const langData = appState.translations[lang];
+        console.log(`  ${lang}: images=${langData?.images?.length || 0}, image0Status=${langData?.images?.[0]?.status}`);
+    });
+
+    if (!canvas || !appState.currentLang || appState.currentIndex === -1 || !appState.translations) {
+        alert('❌ 无法同步：当前没有可用的翻译数据或未开启多语言翻译。');
         return;
     }
 
-    container.style.display = 'block';
-    btnsDiv.innerHTML = '';
+    // 🔑 激活同步锁，防止后续操作覆盖同步数据
+    appState.syncLock = true;
+    console.log('🔒 同步锁已激活');
+
+    // 1. 保存当前状态到当前语言对象
+    const curIdx = appState.currentIndex;
+    const curLang = appState.currentLang;
+    const currentImgObj = appState.translations[curLang].images[curIdx];
+
+    if (!currentImgObj) {
+        alert('❌ 找不到当前图片的翻译记录');
+        appState.syncLock = false;  // 解除锁
+        return;
+    }
+
+    // 获取包含关键属性的JSON
+    // 明确包含我们需要同步的属性
+    const sourceJSON = canvas.toJSON([
+        'left', 'top', 'width', 'height', 'scaleX', 'scaleY', 'angle',
+        'selectable', 'hasControls', 'originalStyle', 'padding', 'borderColor',
+        'cornerColor', 'cornerSize', 'transparentCorners', 'splitByGrapheme',
+        'breakWords', 'lockScalingFlip', 'fontSize', 'fontFamily', 'fontWeight',
+        'fontStyle', 'fill', 'stroke', 'strokeWidth', 'textAlign', 'charSpacing', 'lineHeight'
+    ]);
+
+    // 🔑 调试：显示源 JSON 的结构
+    console.log('📦 源 canvasData:', {
+        hasObjects: !!sourceJSON.objects,
+        objectsCount: sourceJSON.objects?.length || 0,
+        objectTypes: sourceJSON.objects?.map(o => o.type),
+        firstObjFill: sourceJSON.objects?.[0]?.fill,
+        firstObjFontSize: sourceJSON.objects?.[0]?.fontSize,  // 🔑 添加字号
+        firstObjLeft: sourceJSON.objects?.[0]?.left,
+        firstObjTextAlign: sourceJSON.objects?.[0]?.textAlign,
+        firstObjWidth: sourceJSON.objects?.[0]?.width
+    });
+
+    currentImgObj.canvasData = sourceJSON;
+
+    let updatedCount = 0;
+    const allLangs = Object.keys(appState.translations);
+    const syncedData = {}; // 🔑 存储同步的数据，用于验证
+
+    console.log(`[T+0] 🌐 开始遍历语言: [${allLangs.join(', ')}], 当前: ${curLang}`);
+    const startTime = performance.now();
+
+    // 2. 遍历其他所有语言
+    allLangs.forEach(targetLang => {
+        if (targetLang === curLang) {
+            return;
+        }
+
+        const targetImgObj = appState.translations[targetLang].images[curIdx];
+
+        // 🔑 调试日志：帮助诊断同步问题
+        console.log(`检查语言 ${targetLang}:`, {
+            hasImgObj: !!targetImgObj,
+            hasResult: targetImgObj?.result ? true : false,
+            status: targetImgObj?.status,
+            hasTranslations: targetImgObj?.result?.translations ? true : false
+        });
+
+        if (!targetImgObj) {
+            console.warn(`⚠️ 跳过 ${targetLang}: 找不到图片对象`);
+            return;
+        }
+        if (!targetImgObj.result) {
+            console.warn(`⚠️ 跳过 ${targetLang}: 没有翻译结果`);
+            return;
+        }
+        if (targetImgObj.status !== 'done') {
+            console.warn(`⚠️ 跳过 ${targetLang}: 状态不是 done，当前状态: ${targetImgObj.status}`);
+            return;
+        }
+
+        const targetTranslations = targetImgObj.result.translations || [];
+        console.log(`✅ 同步到 ${targetLang}, 翻译文本数量: ${targetTranslations.length}`);
+
+        // 3. 克隆当前布局 (Deep Copy)
+        const targetJSON = JSON.parse(JSON.stringify(sourceJSON));
+
+        // 4. 按顺序替换文本框内容，保留字号，智能适配宽度避免换行
+        let textCount = 0;
+        const canvasWidth = sourceJSON.width || canvas.width || 800;
+        const canvasHeight = sourceJSON.height || canvas.height || 600;
+
+        targetJSON.objects.forEach(obj => {
+            if (obj.type === 'textbox' || obj.type === 'i-text') {
+                if (textCount < targetTranslations.length) {
+                    const newText = targetTranslations[textCount];
+                    const oldWidth = obj.width;
+                    const oldLeft = obj.left;
+                    obj.text = newText;
+
+                    console.log(`[Sync Debug] Processing Obj #${textCount} for ${targetLang}:`);
+                    console.log(`  Source: left=${oldLeft}, textAlign=${obj.textAlign}, width=${oldWidth}, text="${obj.text}"`);
+
+                    // 🔑 使用 fabric.js 测量实际渲染宽度
+                    try {
+                        const tempText = new fabric.Textbox(newText, {
+                            fontSize: obj.fontSize,
+                            fontFamily: obj.fontFamily || 'Arial',
+                            fontWeight: obj.fontWeight || 'normal',
+                            fontStyle: obj.fontStyle || 'normal',
+                            width: 99999  // 设置很大的宽度来测量单行文本宽度
+                        });
+
+                        // 获取文本实际需要的宽度（单行时的宽度）
+                        const neededWidth = (tempText.calcTextWidth() + 25); // 加一些padding
+                        const scaleX = obj.scaleX || 1;
+                        const currentScaledWidth = oldWidth * scaleX;
+                        const neededScaledWidth = neededWidth * scaleX;
+
+                        // 如果需要的渲染宽度比当前渲染宽度大，扩展宽度
+                        if (neededScaledWidth > currentScaledWidth) {
+                            let newScaledWidth = Math.round(neededScaledWidth);
+                            const deltaWidth = newScaledWidth - currentScaledWidth;
+
+                            // 🔑 锚点逻辑：根据对齐方式决定扩展方向
+                            if (obj.textAlign === 'right') {
+                                // 右对齐：向左扩展 (保持右边缘不变)
+                                obj.left -= deltaWidth;
+                            } else if (obj.textAlign === 'center') {
+                                // 居中对齐：向两边扩展 (保持中心不变)
+                                obj.left -= deltaWidth / 2;
+                            }
+                            // 左对齐：向右扩展 (不需要改left)
+
+                            // 🔑 边界约束：确保文本框渲染后不超出画布左右边界
+                            const padding = 15;
+                            const maxPossibleScaledWidth = canvasWidth - 2 * padding;
+
+                            // 1. 宽度强制限制
+                            if (newScaledWidth > maxPossibleScaledWidth) {
+                                newScaledWidth = maxPossibleScaledWidth;
+                                // 重新调整位置以适应最大宽度
+                                if (obj.textAlign === 'right') {
+                                    // 靠右边放
+                                    obj.left = canvasWidth - padding - newScaledWidth;
+                                } else if (obj.textAlign === 'center') {
+                                    obj.left = (canvasWidth - newScaledWidth) / 2;
+                                } else {
+                                    obj.left = padding;
+                                }
+                            }
+
+                            // 2. 左右边界检查与修正
+                            // 左边界检查
+                            if (obj.left < padding) {
+                                obj.left = padding;
+                            }
+                            // 右边界检查
+                            if (obj.left + newScaledWidth > canvasWidth - padding) {
+                                obj.left = canvasWidth - padding - newScaledWidth;
+                                // 二次检查左边界 (如果因为修正右边界导致左边界溢出)
+                                if (obj.left < padding) {
+                                    obj.left = padding;
+                                    // 最后的手段：缩小宽度
+                                    newScaledWidth = canvasWidth - 2 * padding;
+                                }
+                            }
+
+                            obj.width = newScaledWidth / scaleX;
+                            console.log(`  📐 智能扩展 (${obj.textAlign}): left=${obj.left.toFixed(1)}, width=${obj.width.toFixed(1)}`);
+                        }
+                    } catch (e) {
+                        console.error('测量宽度失败:', e);
+                        // 回退逻辑
+                        const maxW = (canvasWidth - obj.left - 10) / (obj.scaleX || 1);
+                        obj.width = Math.min(obj.width * 1.5, maxW);
+                    }
+
+                    console.log(`  同步文本 ${textCount}: fontSize=${obj.fontSize}, width=${obj.width}`);
+                }
+                textCount++;
+            }
+        });
+
+        // 5. 创建完全独立的 canvasData
+        const finalCanvasData = JSON.parse(JSON.stringify(targetJSON));
+
+        // 🔑 存储到本地变量
+        syncedData[targetLang] = finalCanvasData;
+
+        // 直接设置到 appState
+        appState.translations[targetLang].images[curIdx].canvasData = finalCanvasData;
+
+        const elapsed = (performance.now() - startTime).toFixed(2);
+        console.log(`[T+${elapsed}ms] 📝 已保存 ${targetLang}: fontSize=${finalCanvasData?.objects?.[0]?.fontSize}`);
+
+        updatedCount++;
+    });
+
+    const totalElapsed = (performance.now() - startTime).toFixed(2);
+    console.log(`[T+${totalElapsed}ms] ✅ forEach 循环结束, updatedCount=${updatedCount}`);
+
+    // 🔑 同步完成后的处理（在 forEach 循环外部）
+    if (updatedCount > 0) {
+        // 🔑 从本地变量验证
+        console.log(`[T+${(performance.now() - startTime).toFixed(2)}ms] 📊 从 syncedData 验证:`);
+        Object.keys(syncedData).forEach(lang => {
+            const fs = syncedData[lang]?.objects?.[0]?.fontSize;
+            console.log(`  ${lang}: fontSize=${fs}`);
+        });
+
+        // 🔑 从 appState 验证
+        console.log(`[T+${(performance.now() - startTime).toFixed(2)}ms] 📊 同步后验证（renderMultiLangThumbnails 之前）:`);
+        Object.keys(appState.translations).forEach(lang => {
+            const imgObj = appState.translations[lang].images[curIdx];
+            const objects = imgObj?.canvasData?.objects || [];
+            const fontSizes = objects.filter(o => o.type === 'textbox').map(o => o.fontSize);
+            console.log(`  ${lang}: fontSizes=[${fontSizes.join(', ')}]`);
+        });
+
+        // 刷新缩略图显示
+        renderMultiLangThumbnails();
+
+        // 🔑 再次验证（在 renderMultiLangThumbnails 之后）
+        console.log('📊 同步后验证（renderMultiLangThumbnails 之后）:');
+        Object.keys(appState.translations).forEach(lang => {
+            const imgObj = appState.translations[lang].images[curIdx];
+            const objects = imgObj?.canvasData?.objects || [];
+            const fontSizes = objects.filter(o => o.type === 'textbox').map(o => o.fontSize);
+            console.log(`  ${lang}: fontSizes=[${fontSizes.join(', ')}]`);
+        });
+
+        alert(`✅ 同步完成！当前图片的"排版布局"和"字体样式"已同步到其他 ${updatedCount} 种语言。`);
+        console.log(`✅ 已同步样式到 ${updatedCount} 个语言版本`);
+    } else {
+        alert('ℹ️ 未发现需要同步的其他语言图片。');
+    }
+
+    // 🔑 延迟解除同步锁（确保所有异步操作完成后再允许保存）
+    setTimeout(() => {
+        appState.syncLock = false;
+        console.log('🔓 同步锁已解除');
+    }, 500);
+}
+
+
+// 🌍 全局同步：同步当前样式到【所有图片】的【所有语言】
+async function syncStylesToEverything() {
+    console.log('syncStylesToEverything() 被调用');
+
+    if (!canvas || !appState.translations) {
+        alert('❌ 无法同步：当前没有可用的翻译数据。');
+        return;
+    }
+
+    const totalImages = appState.images.length;
+    const totalLangs = Object.keys(appState.translations).length;
+
+    if (!confirm(`确定要将当前排版样式应用到所有图片吗？\n这将影响 ${totalImages} 张图片 × ${totalLangs} 种语言共 ${totalImages * totalLangs} 个结果。`)) {
+        return;
+    }
+
+    // 1. 获取源样式JSON
+    const sourceJSON = canvas.toJSON([
+        'left', 'top', 'width', 'height', 'scaleX', 'scaleY', 'angle',
+        'selectable', 'hasControls', 'originalStyle', 'padding', 'borderColor',
+        'cornerColor', 'cornerSize', 'transparentCorners', 'splitByGrapheme',
+        'breakWords', 'lockScalingFlip', 'fontSize', 'fontFamily', 'fontWeight',
+        'fontStyle', 'fill', 'stroke', 'strokeWidth', 'textAlign', 'charSpacing', 'lineHeight'
+    ]);
+
+    // 立即保存当前这张图
+    if (appState.translations[appState.currentLang] && appState.translations[appState.currentLang].images[appState.currentIndex]) {
+        appState.translations[appState.currentLang].images[appState.currentIndex].canvasData = sourceJSON;
+    }
+
+    // 🔑 激活同步锁
+    appState.syncLock = true;
+    console.log('🔒 全局同步锁已激活');
+
+    const btn = document.getElementById('sync-all-everything-btn');
+    let originalText = '';
+    if (btn) {
+        originalText = btn.innerHTML;
+        btn.innerHTML = '<span>⏳ 正在全局同步...</span>';
+        btn.disabled = true;
+    }
+
+    let updatedCount = 0;
+
+    try {
+        // 2. 遍历所有语言
+        Object.keys(appState.translations).forEach(langCode => {
+            const langData = appState.translations[langCode];
+
+            // 3. 遍历该语言下的所有图片
+            langData.images.forEach((imgObj, imgIdx) => {
+                if (!imgObj || !imgObj.result || imgObj.status !== 'done') return;
+
+                // 跳过当前正在编辑的这张（已经存过了）
+                if (langCode === appState.currentLang && imgIdx === appState.currentIndex) return;
+
+                const translations = imgObj.result.translations || [];
+
+                // 4. 克隆布局
+                const targetJSON = JSON.parse(JSON.stringify(sourceJSON));
+
+                // 5. 替换文本，保持字号不变，智能扩展宽度
+                let textCount = 0;
+                const canvasWidth = sourceJSON.width || canvas.width || 800;
+
+                targetJSON.objects.forEach(obj => {
+                    if (obj.type === 'textbox' || obj.type === 'i-text') {
+                        if (textCount < translations.length) {
+                            const newText = translations[textCount];
+                            const oldWidth = obj.width;
+                            const oldLeft = obj.left;
+                            obj.text = newText;
+
+                            // 🔑 使用 fabric.js 测量实际渲染宽度
+                            try {
+                                const tempText = new fabric.Textbox(newText, {
+                                    fontSize: obj.fontSize,
+                                    fontFamily: obj.fontFamily || 'Arial',
+                                    fontWeight: obj.fontWeight || 'normal',
+                                    fontStyle: obj.fontStyle || 'normal',
+                                    width: 99999  // 设置很大的宽度来测量单行文本宽度
+                                });
+
+                                // 获取文本实际需要的宽度（单行时的宽度）
+                                const neededWidth = (tempText.calcTextWidth() + 25); // 加一些padding
+                                const scaleX = obj.scaleX || 1;
+                                const currentScaledWidth = oldWidth * scaleX;
+                                const neededScaledWidth = neededWidth * scaleX;
+
+                                // 如果需要的宽度比当前宽度大，扩展宽度
+                                if (neededScaledWidth > currentScaledWidth) {
+                                    let newScaledWidth = Math.round(neededScaledWidth);
+                                    const deltaWidth = newScaledWidth - currentScaledWidth;
+
+                                    // 🔹 锚点调整
+                                    if (obj.textAlign === 'right') {
+                                        obj.left -= deltaWidth;
+                                    } else if (obj.textAlign === 'center') {
+                                        obj.left -= deltaWidth / 2;
+                                    }
+
+                                    // 🧱 边界约束
+                                    const padding = 15;
+                                    const maxPossibleScaledWidth = canvasWidth - 2 * padding;
+
+                                    // 1. 宽度限制
+                                    if (newScaledWidth > maxPossibleScaledWidth) {
+                                        newScaledWidth = maxPossibleScaledWidth;
+                                        if (obj.textAlign === 'right') obj.left = canvasWidth - padding - newScaledWidth;
+                                        else if (obj.textAlign === 'center') obj.left = (canvasWidth - newScaledWidth) / 2;
+                                        else obj.left = padding;
+                                    }
+
+                                    // 2. 只有位置溢出时才推
+                                    if (obj.left < padding) obj.left = padding;
+                                    if (obj.left + newScaledWidth > canvasWidth - padding) {
+                                        obj.left = canvasWidth - padding - newScaledWidth;
+                                        if (obj.left < padding) {
+                                            obj.left = padding;
+                                            newScaledWidth = canvasWidth - 2 * padding;
+                                        }
+                                    }
+
+                                    obj.width = newScaledWidth / scaleX;
+                                }
+                            } catch (e) {
+                                // 回退
+                                const maxW = (canvasWidth - obj.left - 10) / (obj.scaleX || 1);
+                                obj.width = Math.min(obj.width * 1.5, maxW);
+                            }
+                        }
+                        textCount++;
+                    }
+                });
+
+                imgObj.canvasData = targetJSON;
+                updatedCount++;
+            });
+        });
+
+        // 🔑 刷新缩略图显示
+        renderMultiLangThumbnails();
+        alert(`✅ 全局同步完成！已应用到 ${updatedCount} 个翻译结果。所有图片的排版现在都与当前图片一致。`);
+    } catch (e) {
+        console.error('全局同步失败:', e);
+        alert('❌ 全局同步失败: ' + e.message);
+    } finally {
+        if (btn) {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        }
+        // 🔑 延迟解除同步锁
+        setTimeout(() => {
+            appState.syncLock = false;
+            console.log('🔓 全局同步锁已解除');
+        }, 500);
+    }
+}
+
+function renderDownloadButtons() {
+    const container = document.getElementById('multi-lang-downloads');
+    const btnsDiv = document.getElementById('lang-download-btns');
+    const syncContainer = document.getElementById('sync-buttons-container');
+
+    if (!appState.translations || Object.keys(appState.translations).length === 0) {
+        if (container) container.style.display = 'none';
+        if (syncContainer) syncContainer.style.display = 'none';
+        return;
+    }
+
+    // 检查是否有任何已完成的翻译
+    let totalDone = 0;
+    let allLangsDone = true;
+    const langCodes = Object.keys(appState.translations);
+
+    langCodes.forEach(langCode => {
+        const langData = appState.translations[langCode];
+        const doneCount = langData.images.filter(img => img.status === 'done').length;
+        totalDone += doneCount;
+        if (doneCount < langData.images.length) {
+            allLangsDone = false;
+        }
+    });
+
+    // 🔑 显示同步按钮容器（只要有任何翻译完成）
+    if (syncContainer && totalDone > 0) {
+        syncContainer.style.display = 'block';
+    }
+
+    if (container) container.style.display = 'block';
+    if (btnsDiv) btnsDiv.innerHTML = '';
 
     Object.keys(appState.translations).forEach(langCode => {
         const langData = appState.translations[langCode];
@@ -2926,7 +3740,7 @@ function renderDownloadButtons() {
         btn.style.cssText = 'padding: 8px 12px; font-size: 12px;';
         btn.innerHTML = `📦 ${langData.name} (${doneCount}张)`;
         btn.onclick = (e) => downloadByLang(langCode, e.currentTarget);
-        btnsDiv.appendChild(btn);
+        if (btnsDiv) btnsDiv.appendChild(btn);
     });
 }
 
@@ -3082,11 +3896,46 @@ async function exportImageOffscreen(imgObj) {
                 });
 
                 // 从保存的JSON恢复画布
-                tempCanvas.loadFromJSON(imgObj.canvasData, () => {
-                    tempCanvas.renderAll();
-                    const dataURL = tempCanvas.toDataURL({ format: 'png', quality: 1 });
-                    tempCanvas.dispose();
-                    resolve(dataURL);
+                // 🔑 关键修复：不使用 loadFromJSON，而是手动反序列化对象
+                // 这样可以完全控制背景图，避免 JSON 中携带的错误背景图导致的问题
+                // 同时这种方式更稳定，不容易卡死
+
+                // 1. 先设置正确的背景图
+                const correctBgImg = new fabric.Image(bgImg, {
+                    originX: 'left',
+                    originY: 'top',
+                    scaleX: 1,
+                    scaleY: 1
+                });
+
+                tempCanvas.setBackgroundImage(correctBgImg, () => {
+                    // 2. 反序列化对象
+                    if (imgObj.canvasData.objects && imgObj.canvasData.objects.length > 0) {
+                        fabric.util.enlivenObjects(imgObj.canvasData.objects, (enlivenedObjects) => {
+                            enlivenedObjects.forEach(obj => {
+                                tempCanvas.add(obj);
+                            });
+
+                            // 3. 渲染并导出
+                            try {
+                                tempCanvas.renderAll();
+                                const dataURL = tempCanvas.toDataURL({ format: 'png', quality: 1 });
+                                tempCanvas.dispose();
+                                resolve(dataURL);
+                            } catch (renderErr) {
+                                console.error('Export render failed:', renderErr);
+                                // 尝试回退
+                                tempCanvas.dispose();
+                                resolve(null);
+                            }
+                        });
+                    } else {
+                        // 没有对象，直接导出背景
+                        tempCanvas.renderAll();
+                        const dataURL = tempCanvas.toDataURL({ format: 'png', quality: 1 });
+                        tempCanvas.dispose();
+                        resolve(dataURL);
+                    }
                 });
             };
             bgImg.onerror = () => reject(new Error('背景图加载失败'));

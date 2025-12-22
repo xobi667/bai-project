@@ -556,6 +556,13 @@ label.upload-zone {
     box-sizing: border-box;
 }
 
+label.upload-zone.dragover {
+    border-color: var(--accent);
+    background: rgba(217, 70, 239, 0.1);
+    transform: scale(0.98);
+    box-shadow: 0 0 15px var(--accent-glow);
+}
+
 label.upload-zone:hover {
     border-color: var(--accent);
     background: rgba(217, 70, 239, 0.05);

@@ -229,6 +229,11 @@
                     <button class="zoom-btn" id="zoomIn">+</button>
                     <button class="zoom-btn" id="zoomFit">适应</button>
                 </div>
+                <!-- 🔑 新增文本按钮，样式与 view-tab 一致 -->
+                <button id="add-text-btn-top" class="view-tab"
+                    style="margin-left: auto; background: rgba(168, 85, 247, 0.25); border-color: rgba(168, 85, 247, 0.6); color: #e9d5ff;">
+                    <span style="font-weight: bold; margin-right: 4px;">+</span> 新增文本
+                </button>
             </div>
 
             <div class="preview-container">
@@ -274,21 +279,9 @@
         <!-- 右侧面板 - 编辑器 (强制滚动) -->
         <aside class="aside-panel right-side"
             style="overflow-y: scroll !important; overflow-x: hidden; max-height: calc(100vh - 70px);">
-            <!-- 工具面板 (新增) -->
-            <div class="panel-card" id="tools-panel"
-                style="display: none; flex-shrink: 0; margin-bottom: 12px; border: 1px solid rgba(255,255,255,0.1);">
-                <div class="card-header">
-                    <span class="style-header">工具箱 🛠️</span>
-                </div>
-                <div class="card-body" style="padding: 12px;">
-                    <button id="add-text-btn" class="action-btn secondary"
-                        style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 10px; background: rgba(99, 102, 241, 0.2); border: 1px solid rgba(99, 102, 241, 0.5); color: #fff;">
-                        <span style="font-size: 18px; font-weight: bold;">+</span>
-                        <span>新增文本 (Add Text)</span>
-                    </button>
-                </div>
-            </div>
+            <!-- 工具面板已移除，内容已分散到更合理的位置 -->
 
+            <!-- 文字样式编辑器 (现在处于最顶部) -->
             <div class="panel-card" id="text-style-editor" style="display: none; flex-shrink: 0;">
                 <div class="card-header">
                     <span class="style-header">文字编辑 ✏️</span>
@@ -519,10 +512,36 @@
                         <span>📦 批量下载 All</span>
                     </button>
 
-                    <!-- 多语言分别下载按钮容器 -->
+                    <div style="height: 12px;"></div>
+                    <button class="action-btn" id="download-direct-btn" onclick="downloadDirectly()"
+                        style="background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: var(--text-primary);">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2">
+                            <path d="M7 17l5 5 5-5M12 22V4.5" />
+                        </svg>
+                        <span>🚀 直接下载 (不打包)</span>
+                    </button>
                     <div id="multi-lang-downloads" style="margin-top: 12px; display: none;">
                         <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">按语言下载：</div>
                         <div id="lang-download-btns" style="display: flex; flex-direction: column; gap: 8px;"></div>
+                    </div>
+
+                    <!-- 🌍 全局同步功能 (移入保存区) - 默认隐藏，翻译完成后显示 -->
+                    <div id="sync-buttons-container"
+                        style="margin-top: 20px; padding-top: 15px; border-top: 1px dashed var(--border); display: none;">
+                        <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 10px;">同步设置：</div>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                            <button id="sync-current-btn" class="style-btn" onclick="syncStylesToAllLangs()"
+                                title="仅同步当前图片的语言"
+                                style="width: 100%; height: 40px; background: rgba(168, 85, 247, 0.1); border-color: rgba(168, 85, 247, 0.3);">
+                                <span style="font-size: 14px;">🔄 当前图</span>
+                            </button>
+                            <button id="sync-all-everything-btn" class="style-btn" onclick="syncStylesToEverything()"
+                                title="同步全部图片和语言"
+                                style="width: 100%; height: 40px; background: rgba(139, 92, 246, 0.2); border-color: rgba(139, 92, 246, 0.4);">
+                                <span style="font-size: 14px;">🌍 全部图</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -598,7 +617,7 @@
     <!-- 历史提示元素 -->
     <div class="history-tooltip" id="historyTooltip"></div>
 
-    <script src="/static/js/app.js?v=2024-12-20-v22-Rebrand"></script>
+    <script src="/static/js/app.js?v=2024-12-23-v28-FixBoundaryCheck"></script>
 </body>
 
 </html>
