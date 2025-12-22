@@ -17,13 +17,22 @@ outputs/
 uploads/
 static/uploads/
 static/debug/
+static/output/
 
-# PyInstaller build output
+# Build artifacts
 build/
 dist/
-*.spec.bak
+*.spec
 
 # Editor
 .vscode/
 .idea/
 .DS_Store
+
+# Images and icons (except those needed)
+*.ico
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
