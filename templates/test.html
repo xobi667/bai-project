@@ -9,7 +9,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
     <!-- Google Fonts: Varela Round (Rounded/Cute) -->
     <link href="https://fonts.googleapis.com/css2?family=Varela+Round&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/main.css?v=25">
+    <link rel="stylesheet" href="/static/css/main.css?v=27-UndoRedo">
     <!-- 引入JSZip用于批量打包下载 -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
@@ -34,7 +34,8 @@
             </div>
         </div>
         <div class="header-center">
-            <div class="workflow-steps">
+            <!-- 步骤流程 (默认显示) -->
+            <div class="workflow-steps" id="workflow-steps">
                 <div class="step active">
                     <span class="step-num">1</span>
                     <span class="step-text">上传图片 📸</span>
@@ -50,8 +51,34 @@
                     <span class="step-text">编辑下载 🎀</span>
                 </div>
             </div>
+
+            <!-- 矩形属性面板 (选中矩形时显示) -->
+            <div class="rect-properties-panel" id="rect-properties-panel" style="display: none;">
+                <span class="rect-panel-title">□ 矩形样式</span>
+                <div class="rect-prop-group">
+                    <label>填充</label>
+                    <input type="color" id="rect-fill-color" value="#000000">
+                </div>
+                <div class="rect-prop-group">
+                    <label>描边</label>
+                    <input type="color" id="rect-stroke-color" value="#ffffff">
+                </div>
+                <div class="rect-prop-group">
+                    <label>边宽</label>
+                    <input type="range" id="rect-stroke-width" min="0" max="10" value="0" style="width: 60px;">
+                    <span id="rect-stroke-width-val">0</span>
+                </div>
+                <div class="rect-prop-group">
+                    <label>圆角</label>
+                    <input type="range" id="rect-corner-radius" min="0" max="50" value="0" style="width: 60px;">
+                    <span id="rect-corner-radius-val">0</span>
+                </div>
+            </div>
         </div>
         <div class="header-right">
+            <button class="header-btn" id="sync-settings-btn" title="同步到文件夹">
+                <span style="font-size: 20px;">📂</span>
+            </button>
             <button class="header-btn" id="help-btn" title="使用帮助">
                 <span style="font-size: 20px;">📖</span>
             </button>
@@ -229,9 +256,30 @@
                     <button class="zoom-btn" id="zoomIn">+</button>
                     <button class="zoom-btn" id="zoomFit">适应</button>
                 </div>
-                <!-- 🔑 新增文本按钮，样式与 view-tab 一致 -->
+                <!-- 🔑 撤销/重做按钮 -->
+                <div class="history-controls">
+                    <button class="history-btn" id="undoBtn" title="撤销 (Ctrl+Z)">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2">
+                            <path d="M3 7v6h6"></path>
+                            <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path>
+                        </svg>
+                    </button>
+                    <button class="history-btn" id="redoBtn" title="重做 (Ctrl+Shift+Z)">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2">
+                            <path d="M21 7v6h-6"></path>
+                            <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3l3 2.7"></path>
+                        </svg>
+                    </button>
+                </div>
+                <!-- 🔑 添加矩形和文本按钮 -->
+                <button id="add-rect-btn" class="view-tab"
+                    style="margin-left: auto; background: rgba(34, 197, 94, 0.25); border-color: rgba(34, 197, 94, 0.6); color: #bbf7d0;">
+                    <span style="font-weight: bold; margin-right: 4px;">+</span>□ 矩形
+                </button>
                 <button id="add-text-btn-top" class="view-tab"
-                    style="margin-left: auto; background: rgba(168, 85, 247, 0.25); border-color: rgba(168, 85, 247, 0.6); color: #e9d5ff;">
+                    style="background: rgba(168, 85, 247, 0.25); border-color: rgba(168, 85, 247, 0.6); color: #e9d5ff;">
                     <span style="font-weight: bold; margin-right: 4px;">+</span> 新增文本
                 </button>
             </div>
@@ -597,9 +645,53 @@
                     <h4>⌨️ 快捷键</h4>
                     <div class="shortcut-list">
                         <div><kbd>Ctrl</kbd>+<kbd>Z</kbd> 撤销</div>
-                        <div><kbd>Ctrl</kbd>+<kbd>Y</kbd> 重做</div>
+                        <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> 重做</div>
                         <div><kbd>Delete</kbd> 删除选中</div>
                         <div><kbd>Ctrl</kbd>+<kbd>A</kbd> 全选</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 同步到文件夹模态框 -->
+    <div class="sync-modal" id="syncModal">
+        <div class="sync-modal-content">
+            <div class="sync-modal-header">
+                <h3>📂 同步到文件夹</h3>
+                <button class="sync-close-btn" id="sync-close">&times;</button>
+            </div>
+            <div class="sync-modal-body">
+                <div class="sync-description">
+                    配置各语言的目标文件夹路径，翻译完成后可一键同步替换。<br>
+                    <small>💡 点击输入框右侧的文件夹图标可快速选择路径</small>
+                </div>
+                <div id="sync-lang-paths">
+                    <!-- 语言路径配置将由 JS 动态生成 -->
+                    <div class="sync-empty-hint" id="sync-empty-hint">
+                        <span style="font-size: 32px;">🌐</span>
+                        <p>请先翻译图片，然后在这里配置各语言的目标文件夹</p>
+                    </div>
+                </div>
+                <div class="sync-actions">
+                    <button class="action-btn primary" id="sync-all-btn">
+                        🚀 一键同步全部
+                    </button>
+                    <button class="action-btn secondary" id="sync-history-btn" title="历史记录"
+                        onclick="toggleHistoryPanel()">
+                        📜
+                    </button>
+                </div>
+                <div id="sync-status" class="sync-status" style="display: none;"></div>
+
+                <!-- 历史记录面板 -->
+                <div id="sync-history-panel" class="sync-history-panel" style="display: none;">
+                    <div class="sync-history-header">
+                        <span>📜 同步历史记录</span>
+                        <button class="sync-close-btn" onclick="toggleHistoryPanel()">&times;</button>
+                    </div>
+                    <div id="sync-history-list" class="sync-history-list">
+                        <!-- 历史记录列表将由 JS 动态生成 -->
                     </div>
                 </div>
             </div>
@@ -617,7 +709,7 @@
     <!-- 历史提示元素 -->
     <div class="history-tooltip" id="historyTooltip"></div>
 
-    <script src="/static/js/app.js?v=2024-12-23-v31-FixGlobalSyncAlignment"></script>
+    <script src="/static/js/app.js?v=2024-12-23-v58-FinalStability"></script>
 </body>
 
 </html>

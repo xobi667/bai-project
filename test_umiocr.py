@@ -1734,17 +1734,314 @@ def clear_cache():
             'error': str(e)
         }), 500
 
+# ========== 同步到文件夹功能模块 (增强版：缓存优先架构) ==========
+
+# 同步缓存目录
+SYNC_CACHE_FOLDER = os.path.join(WORK_DIR, 'sync_cache')
+os.makedirs(SYNC_CACHE_FOLDER, exist_ok=True)
+
+@app.route('/api/sync-to-folder', methods=['POST'])
+def sync_to_folder():
+    """将单张图片同步到指定文件夹（支持递归查找替换）"""
+    try:
+        data = request.get_json()
+        target_path = data.get('target_path', '').strip()
+        filename = data.get('filename', '').strip()
+        image_data = data.get('image_data', '')
+        
+        if not target_path or not filename or not image_data:
+            return jsonify({'success': False, 'error': '缺少必要参数'})
+        
+        # 安全检查
+        if '..' in target_path or '..' in filename:
+            return jsonify({'success': False, 'error': '路径包含非法字符'})
+        
+        if not os.path.isdir(target_path):
+            return jsonify({'success': False, 'error': f'路径不存在: {target_path}'})
+        
+        # 🔍 智能搜索：深度优先搜索同名文件，实现精准替换
+        dest_file = os.path.join(target_path, filename)
+        found_existing = False
+        
+        for root, dirs, files in os.walk(target_path):
+            if filename in files:
+                dest_file = os.path.join(root, filename)
+                found_existing = True
+                print(f"🔍 找到已存在的文件，执行精准替换: {dest_file}")
+                break
+        
+        if not found_existing:
+            print(f"ℹ️ 未在子目录找到同名文件，将保存至根目录: {dest_file}")
+        
+        # 解码 Base64 图片数据
+        try:
+            if ',' in image_data:
+                image_data = image_data.split(',')[1]
+            image_bytes = base64.b64decode(image_data)
+        except Exception as e:
+            return jsonify({'success': False, 'error': f'Base64解码失败: {str(e)}'})
+        
+        # 写入文件
+        with open(dest_file, 'wb') as f:
+            f.write(image_bytes)
+        
+        print(f"✅ 同步成功: {dest_file}")
+        return jsonify({'success': True, 'path': dest_file})
+        
+    except Exception as e:
+        print(f"❌ 同步失败: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/validate-path', methods=['POST'])
+def validate_path():
+    """验证路径是否存在且可写"""
+    try:
+        data = request.get_json()
+        path = data.get('path', '').strip()
+        
+        if not path:
+            return jsonify({'valid': False, 'error': '路径为空'})
+        
+        if not os.path.exists(path):
+            return jsonify({'valid': False, 'error': '路径不存在'})
+        
+        if not os.path.isdir(path):
+            return jsonify({'valid': False, 'error': '不是有效的文件夹'})
+        
+        # 尝试写入测试文件检查权限
+        test_file = os.path.join(path, '.xobi_write_test')
+        try:
+            with open(test_file, 'w') as f:
+                f.write('test')
+            os.remove(test_file)
+        except:
+            return jsonify({'valid': False, 'error': '没有写入权限'})
+        
+        return jsonify({'valid': True, 'path': path})
+        
+    except Exception as e:
+        return jsonify({'valid': False, 'error': str(e)})
+
+@app.route('/api/select-folder', methods=['POST'])
+def select_folder():
+    """打开原生对话框选择文件夹"""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        
+        folder_selected = filedialog.askdirectory(title="选择同步目标文件夹")
+        root.destroy()
+        
+        if folder_selected:
+            folder_selected = folder_selected.replace('/', os.sep)
+            return jsonify({'success': True, 'path': folder_selected})
+        else:
+            return jsonify({'success': False, 'message': '未选择文件夹'})
+            
+    except Exception as e:
+        print(f"❌ 打开文件夹选择框失败: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/export-to-cache', methods=['POST'])
+def export_to_cache():
+    """
+    批量将翻译结果导出到缓存文件夹（快速！）
+    前端传入: { images: [{langCode, filename, imageData}, ...] }
+    返回: { success, cachePath, counts: {langCode: count} }
+    """
+    try:
+        data = request.get_json()
+        images = data.get('images', [])
+        
+        if not images:
+            return jsonify({'success': False, 'error': '没有图片数据'})
+        
+        # 创建带时间戳的缓存目录
+        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        cache_path = os.path.join(SYNC_CACHE_FOLDER, timestamp)
+        os.makedirs(cache_path, exist_ok=True)
+        
+        counts = {}
+        
+        for item in images:
+            lang_code = item.get('langCode', 'unknown')
+            filename = item.get('filename', 'image.png')
+            image_data = item.get('imageData', '')
+            
+            if not image_data:
+                continue
+            
+            # 为每种语言创建子目录
+            lang_folder = os.path.join(cache_path, lang_code)
+            os.makedirs(lang_folder, exist_ok=True)
+            
+            # 解码并保存
+            try:
+                if ',' in image_data:
+                    image_data = image_data.split(',')[1]
+                image_bytes = base64.b64decode(image_data)
+                
+                dest_file = os.path.join(lang_folder, filename)
+                with open(dest_file, 'wb') as f:
+                    f.write(image_bytes)
+                
+                counts[lang_code] = counts.get(lang_code, 0) + 1
+            except Exception as e:
+                print(f"⚠️ 导出失败 {filename}: {e}")
+        
+        print(f"✅ 导出到缓存完成: {cache_path}, 统计: {counts}")
+        return jsonify({
+            'success': True,
+            'cachePath': cache_path,
+            'counts': counts
+        })
+        
+    except Exception as e:
+        print(f"❌ 导出到缓存失败: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/sync-from-cache', methods=['POST'])
+def sync_from_cache():
+    """
+    从缓存目录同步到目标文件夹（快速替换！）
+    前端传入: { cachePath, langPaths: {langCode: targetPath} }
+    返回: { success, results: {langCode: {success, fail}} }
+    """
+    try:
+        data = request.get_json()
+        cache_path = data.get('cachePath', '')
+        lang_paths = data.get('langPaths', {})
+        
+        if not cache_path or not os.path.isdir(cache_path):
+            return jsonify({'success': False, 'error': '缓存路径无效'})
+        
+        if not lang_paths:
+            return jsonify({'success': False, 'error': '未配置目标路径'})
+        
+        results = {}
+        
+        for lang_code, target_path in lang_paths.items():
+            if not target_path or not os.path.isdir(target_path):
+                results[lang_code] = {'success': 0, 'fail': 0, 'error': '目标路径无效'}
+                continue
+            
+            lang_cache_folder = os.path.join(cache_path, lang_code)
+            if not os.path.isdir(lang_cache_folder):
+                results[lang_code] = {'success': 0, 'fail': 0, 'error': '缓存中无此语言'}
+                continue
+            
+            success_count = 0
+            fail_count = 0
+            
+            for filename in os.listdir(lang_cache_folder):
+                src_file = os.path.join(lang_cache_folder, filename)
+                if not os.path.isfile(src_file):
+                    continue
+                
+                # 智能搜索目标位置
+                dest_file = os.path.join(target_path, filename)
+                for root, dirs, files in os.walk(target_path):
+                    if filename in files:
+                        dest_file = os.path.join(root, filename)
+                        break
+                
+                try:
+                    shutil.copy2(src_file, dest_file)
+                    success_count += 1
+                    print(f"✅ 替换: {filename} → {dest_file}")
+                except Exception as e:
+                    fail_count += 1
+                    print(f"❌ 替换失败 {filename}: {e}")
+            
+            results[lang_code] = {'success': success_count, 'fail': fail_count}
+        
+        return jsonify({'success': True, 'results': results})
+        
+    except Exception as e:
+        print(f"❌ 从缓存同步失败: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/list-sync-history', methods=['GET'])
+def list_sync_history():
+    """列出所有同步历史记录"""
+    try:
+        history = []
+        if os.path.isdir(SYNC_CACHE_FOLDER):
+            for folder_name in sorted(os.listdir(SYNC_CACHE_FOLDER), reverse=True):
+                folder_path = os.path.join(SYNC_CACHE_FOLDER, folder_name)
+                if os.path.isdir(folder_path):
+                    # 统计每个语言文件夹的文件数
+                    langs = {}
+                    total_size = 0
+                    for lang_folder in os.listdir(folder_path):
+                        lang_path = os.path.join(folder_path, lang_folder)
+                        if os.path.isdir(lang_path):
+                            files = [f for f in os.listdir(lang_path) if os.path.isfile(os.path.join(lang_path, f))]
+                            langs[lang_folder] = len(files)
+                            for f in files:
+                                total_size += os.path.getsize(os.path.join(lang_path, f))
+                    
+                    history.append({
+                        'name': folder_name,
+                        'path': folder_path,
+                        'langs': langs,
+                        'sizeMB': round(total_size / 1024 / 1024, 2)
+                    })
+        
+        return jsonify({'success': True, 'history': history})
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/delete-sync-history', methods=['POST'])
+def delete_sync_history():
+    """删除指定的同步历史记录"""
+    try:
+        data = request.get_json()
+        folder_name = data.get('name', '')
+        
+        if not folder_name:
+            return jsonify({'success': False, 'error': '未指定文件夹名'})
+        
+        folder_path = os.path.join(SYNC_CACHE_FOLDER, folder_name)
+        
+        # 安全检查
+        if not folder_path.startswith(SYNC_CACHE_FOLDER):
+            return jsonify({'success': False, 'error': '非法路径'})
+        
+        if os.path.isdir(folder_path):
+            shutil.rmtree(folder_path)
+            print(f"🗑️ 已删除同步历史: {folder_path}")
+            return jsonify({'success': True})
+        else:
+            return jsonify({'success': False, 'error': '文件夹不存在'})
+            
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/open-folder', methods=['POST'])
+def open_folder():
+    """在资源管理器中打开指定文件夹"""
+    try:
+        data = request.get_json()
+        folder_path = data.get('path', '')
+        
+        if not folder_path or not os.path.isdir(folder_path):
+            return jsonify({'success': False, 'error': '路径无效'})
+        
+        os.startfile(folder_path)
+        return jsonify({'success': True})
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
 if __name__ == '__main__':
-    import webbrowser
-    import threading
-    
-    # 自动打开浏览器
-    def open_browser():
-        import time
-        time.sleep(1.5)  # 等待服务器启动
-        webbrowser.open('http://127.0.0.1:5001')
-    
-    threading.Thread(target=open_browser, daemon=True).start()
+    # 注意：浏览器由启动脚本（bat文件）打开，这里不再重复打开
+    # 避免双击bat文件时打开两个浏览器窗口
     
     print("\n" + "="*50)
     print("   Xobi Image Translator 已启动！")
@@ -1752,4 +2049,4 @@ if __name__ == '__main__':
     print("   http://127.0.0.1:5001")
     print("="*50 + "\n")
     
-    app.run(debug=True, port=5001, use_reloader=False)  # 禁用reloader避免重复打开浏览器 
+    app.run(debug=True, port=5001, use_reloader=False)  # 禁用reloader避免重复启动 

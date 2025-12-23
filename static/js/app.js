@@ -1,6 +1,6 @@
 
 // 🔑 版本标记 - 用于确认浏览器加载了最新代码
-const APP_VERSION = '2024-12-20-v22-Rebrand';
+const APP_VERSION = '2024-12-23-v58-FinalStability';
 console.log('🚀 App.js 版本:', APP_VERSION);
 
 // 全局变量
@@ -17,75 +17,212 @@ let currentFilename = 'translated_image.png';
 let selectedObject = null;
 let selectedObjectsArray = null; // 用于存储多选的对象数组
 
-// 操作历史记录 - 简化版全局栈
+// 操作历史记录 - 每张图片独立历史栈（重构版：不使用 loadFromJSON，避免黑屏）
 const history = {
-    undoStack: [],
-    redoStack: [],
     isPerformingAction: false,
+    isSavingDisabled: false, // 🔑 新增：用于在批量加载或刷新期间禁止保存状态
+    maxStackSize: 30,
 
+    // 需要保存的属性列表
+    propertyList: [
+        'type', 'left', 'top', 'width', 'height', 'scaleX', 'scaleY', 'angle',
+        'fontSize', 'fontFamily', 'fontWeight', 'fontStyle', 'fill', 'stroke',
+        'strokeWidth', 'paintFirst', 'textAlign', 'charSpacing', 'lineHeight',
+        'text', 'splitByGrapheme', 'breakWords', 'padding', 'originX', 'originY',
+        'rx', 'ry', 'isUserRect', '_originalRx', '_originalRy'
+    ],
+
+    // 获取当前图片的历史数据（每个语言+图片索引独立）
+    getImageHistory() {
+        if (!appState.currentLang || !appState.translations[appState.currentLang]) return null;
+        const images = appState.translations[appState.currentLang].images;
+        if (!images || appState.currentIndex < 0 || appState.currentIndex >= images.length) return null;
+
+        const imgObj = images[appState.currentIndex];
+        if (!imgObj.historyData) {
+            imgObj.historyData = { undoStack: [], redoStack: [] };
+        }
+        return imgObj.historyData;
+    },
+
+    // 🔑 序列化当前画布上的可编辑对象（确保获取绝对坐标）
+    serializeObjects() {
+        if (!canvas) return [];
+
+        // 🔑 关键：获取对象前，先排除所有处于 ActiveSelection 状态的相对坐标影响
+        // 我们不直接使用 discardActiveObject 以免打断用户，而是克隆对象并获取其真实属性
+        const objects = canvas.getObjects().filter(obj =>
+            obj.type === 'textbox' || obj.type === 'i-text' || obj.type === 'rect');
+
+        return objects.map(obj => {
+            const data = {};
+
+            // 🔑 处理坐标：如果在多选组中，获取其绝对坐标
+            const isInsideGroup = obj.group && obj.group.type === 'activeSelection';
+            let left = obj.left;
+            let top = obj.top;
+
+            if (isInsideGroup) {
+                // 如果在组内，计算绝对位置
+                const center = obj.getCenterPoint();
+                left = center.x - (obj.width * obj.scaleX) / 2;
+                top = center.y - (obj.height * obj.scaleY) / 2;
+            }
+
+            this.propertyList.forEach(prop => {
+                if (prop === 'left') data.left = left;
+                else if (prop === 'top') data.top = top;
+                else if (obj[prop] !== undefined) {
+                    data[prop] = obj[prop];
+                }
+            });
+            return data;
+        });
+    },
+
+    // 🔑 从序列化数据重建对象到画布
+    restoreObjects(objectsData) {
+        if (!canvas || !objectsData) return;
+
+        this.isSavingDisabled = true; // 🔑 锁定保存
+
+        // 只删除可编辑对象（保留背景图）
+        const toRemove = canvas.getObjects().filter(obj =>
+            obj.type === 'textbox' || obj.type === 'i-text' || obj.type === 'rect');
+        toRemove.forEach(obj => canvas.remove(obj));
+
+        // 重建对象
+        objectsData.forEach(objData => {
+            // ... (此处逻辑不变，缩略显示)
+            let fabricObj = null;
+            if (objData.type === 'textbox' || objData.type === 'i-text' || objData.type === 'text') {
+                fabricObj = new fabric.Textbox(objData.text || '', {
+                    left: objData.left || 0,
+                    top: objData.top || 0,
+                    width: objData.width || 200,
+                    fontSize: objData.fontSize || 16,
+                    fontFamily: objData.fontFamily || 'Arial',
+                    fontWeight: objData.fontWeight || 'normal',
+                    fontStyle: objData.fontStyle || 'normal',
+                    fill: objData.fill !== undefined ? objData.fill : '#000000',
+                    textAlign: objData.textAlign || 'left',
+                    lineHeight: objData.lineHeight || 1.16,
+                    charSpacing: objData.charSpacing || 0,
+                    stroke: objData.stroke !== undefined ? objData.stroke : null,
+                    strokeWidth: objData.strokeWidth !== undefined ? objData.strokeWidth : 0,
+                    paintFirst: objData.paintFirst || 'fill',
+                    scaleX: objData.scaleX || 1,
+                    scaleY: objData.scaleY || 1,
+                    angle: objData.angle || 0,
+                    originX: objData.originX || 'left',
+                    originY: objData.originY || 'top',
+                    splitByGrapheme: objData.splitByGrapheme || false,
+                    breakWords: objData.breakWords || false,
+                    padding: objData.padding || 0,
+                    borderColor: '#a855f7',
+                    cornerColor: '#a855f7',
+                    cornerSize: 10,
+                    transparentCorners: false
+                });
+            } else if (objData.type === 'rect') {
+                fabricObj = new fabric.Rect({
+                    left: objData.left || 0,
+                    top: objData.top || 0,
+                    width: objData.width || 100,
+                    height: objData.height || 50,
+                    fill: objData.fill !== undefined ? objData.fill : '#000000',
+                    stroke: objData.stroke !== undefined ? objData.stroke : null,
+                    strokeWidth: objData.strokeWidth !== undefined ? objData.strokeWidth : 0,
+                    rx: objData.rx || 0,
+                    ry: objData.ry || 0,
+                    scaleX: objData.scaleX || 1,
+                    scaleY: objData.scaleY || 1,
+                    angle: objData.angle || 0,
+                    isUserRect: true,
+                    _originalRx: objData._originalRx || objData.rx || 0,
+                    _originalRy: objData._originalRy || objData.ry || 0,
+                    borderColor: '#a855f7',
+                    cornerColor: '#a855f7',
+                    cornerSize: 10,
+                    transparentCorners: false
+                });
+
+                // 绑定矩形缩放监听器
+                fabricObj.on('scaling', function () {
+                    this.set('rx', this._originalRx || 0);
+                    this.set('ry', this._originalRy || 0);
+                });
+            }
+
+            if (fabricObj) {
+                canvas.add(fabricObj);
+                fabricObj.setCoords(); // 🔑 强制同步包围盒和坐标点
+            }
+        });
+
+        this.isSavingDisabled = false; // 🔑 解锁保存
+        canvas.renderAll();
+    },
+
+    // 保存当前状态
     saveState() {
-        if (this.isPerformingAction) return;
+        if (this.isPerformingAction || this.isSavingDisabled) return;
         if (!canvas) return;
 
-        // 只保存文本对象
-        const objects = canvas.getObjects().filter(obj => obj.type === 'textbox' || obj.type === 'i-text');
+        const historyData = this.getImageHistory();
+        if (!historyData) return;
 
-        if (objects.length === 0) {
+        const objectsData = this.serializeObjects();
+        // 🔑 优化：允许保存空数组（即空画布状态），以便撤销到最初落脚点
+        const stateToSave = JSON.stringify(objectsData);
+
+        // 如果栈顶已经是这个状态，不要重复保存
+        if (historyData.undoStack.length > 0 && historyData.undoStack[historyData.undoStack.length - 1] === stateToSave) {
             return;
         }
 
-        // 使用完整的 toJSON 保存所有属性
-        const currentState = canvas.toJSON([
-            'left', 'top', 'width', 'height', 'scaleX', 'scaleY', 'angle',
-            'selectable', 'hasControls', 'fontSize', 'fontFamily', 'fontWeight',
-            'fontStyle', 'fill', 'stroke', 'strokeWidth', 'textAlign', 'charSpacing',
-            'lineHeight', 'text', 'splitByGrapheme', 'breakWords', 'originX', 'originY',
-            'borderColor', 'cornerColor', 'cornerSize', 'transparentCorners', 'padding'
-        ]);
-
-        this.undoStack.push(JSON.stringify(currentState));
-        console.log(`💾 saveState: 保存状态, 栈深度=${this.undoStack.length}`);
+        historyData.undoStack.push(stateToSave);
+        console.log(`💾 saveState: 图片${appState.currentIndex}, 栈深度=${historyData.undoStack.length}`);
 
         // 清空重做栈
-        this.redoStack = [];
+        historyData.redoStack = [];
 
         // 限制历史记录大小
-        if (this.undoStack.length > 30) {
-            this.undoStack.shift();
+        if (historyData.undoStack.length > this.maxStackSize) {
+            historyData.undoStack.shift();
         }
+
+        this.updateButtonStates();
     },
 
+    // 撤销 (Ctrl+Z)
     undo() {
-        if (!canvas || this.undoStack.length === 0) {
-            console.log('❌ 无法撤销：栈为空');
+        const historyData = this.getImageHistory();
+        if (!canvas || !historyData || historyData.undoStack.length <= 1) {
+            console.log('❌ 无法撤销：栈为空或已是初始状态');
             return;
         }
 
         this.isPerformingAction = true;
         console.log('⬅️ 撤销操作');
 
-        // 保存当前状态到重做栈
-        const currentState = canvas.toJSON([
-            'left', 'top', 'width', 'height', 'scaleX', 'scaleY', 'angle',
-            'selectable', 'hasControls', 'fontSize', 'fontFamily', 'fontWeight',
-            'fontStyle', 'fill', 'stroke', 'strokeWidth', 'textAlign', 'charSpacing',
-            'lineHeight', 'text', 'splitByGrapheme', 'breakWords', 'originX', 'originY',
-            'borderColor', 'cornerColor', 'cornerSize', 'transparentCorners', 'padding'
-        ]);
-        this.redoStack.push(JSON.stringify(currentState));
+        // 🔑 逻辑修复：弹出当前状态到重做栈，然后恢复撤销栈的新栈顶
+        const currentState = historyData.undoStack.pop();
+        historyData.redoStack.push(currentState);
 
-        // 恢复前一个状态
-        const previousState = this.undoStack.pop();
+        // 获取新的栈顶状态并恢复
+        const previousState = JSON.parse(historyData.undoStack[historyData.undoStack.length - 1]);
+        this.restoreObjects(previousState);
 
-        canvas.loadFromJSON(previousState, () => {
-            canvas.renderAll();
-            this.isPerformingAction = false;
-            console.log('✅ 撤销完成');
-        });
+        this.isPerformingAction = false;
+        this.updateButtonStates();
+        console.log('✅ 撤销完成，剩余次数:', historyData.undoStack.length - 1);
     },
 
+    // 重做 (Ctrl+Alt+Z 或 Ctrl+Y)
     redo() {
-        if (!canvas || this.redoStack.length === 0) {
+        const historyData = this.getImageHistory();
+        if (!canvas || !historyData || historyData.redoStack.length === 0) {
             console.log('❌ 无法重做：栈为空');
             return;
         }
@@ -93,31 +230,41 @@ const history = {
         this.isPerformingAction = true;
         console.log('➡️ 重做操作');
 
-        // 保存当前状态到撤销栈
-        const currentState = canvas.toJSON([
-            'left', 'top', 'width', 'height', 'scaleX', 'scaleY', 'angle',
-            'selectable', 'hasControls', 'fontSize', 'fontFamily', 'fontWeight',
-            'fontStyle', 'fill', 'stroke', 'strokeWidth', 'textAlign', 'charSpacing',
-            'lineHeight', 'text', 'splitByGrapheme', 'breakWords', 'originX', 'originY',
-            'borderColor', 'cornerColor', 'cornerSize', 'transparentCorners', 'padding'
-        ]);
-        this.undoStack.push(JSON.stringify(currentState));
+        // 🔑 逻辑修复：从重做栈弹出，存回撤销栈，然后恢复该状态
+        const nextState = historyData.redoStack.pop();
+        historyData.undoStack.push(nextState);
 
-        // 恢复下一个状态
-        const nextState = this.redoStack.pop();
+        this.restoreObjects(JSON.parse(nextState));
 
-        canvas.loadFromJSON(nextState, () => {
-            canvas.renderAll();
-            this.isPerformingAction = false;
-            console.log('✅ 重做完成');
-        });
+        this.isPerformingAction = false;
+        this.updateButtonStates();
+        console.log('✅ 重做完成');
     },
 
-    // 清除历史（切换语言/图片时调用）
+    // 更新按钮状态
+    updateButtonStates() {
+        const historyData = this.getImageHistory();
+        const undoBtn = document.getElementById('undoBtn');
+        const redoBtn = document.getElementById('redoBtn');
+
+        // 🔑 逻辑修复：由于 undoStack 包含当前状态，只有 length > 1 时才能撤销
+        if (undoBtn) {
+            undoBtn.disabled = !historyData || historyData.undoStack.length <= 1;
+        }
+        if (redoBtn) {
+            redoBtn.disabled = !historyData || historyData.redoStack.length === 0;
+        }
+    },
+
+    // 清除当前图片历史
     clear() {
-        this.undoStack = [];
-        this.redoStack = [];
-        console.log('🧹 历史记录已清空');
+        const historyData = this.getImageHistory();
+        if (historyData) {
+            historyData.undoStack = [];
+            historyData.redoStack = [];
+        }
+        this.updateButtonStates();
+        console.log('🧹 当前图片历史记录已清空');
     }
 };
 
@@ -250,9 +397,9 @@ document.addEventListener('DOMContentLoaded', function () {
         alert('错误：找不到翻译按钮元素！');
     }
 
-    // 重新添加键盘快捷键
+    // 集中管理键盘快捷键
     document.addEventListener('keydown', function (e) {
-        // 如果在输入框中，不处理删除键
+        // 如果在输入框中，或者正在执行历史操作，不处理
         const activeElement = document.activeElement;
         const isInputField = activeElement && (
             activeElement.tagName === 'INPUT' ||
@@ -260,14 +407,16 @@ document.addEventListener('DOMContentLoaded', function () {
             activeElement.contentEditable === 'true'
         );
 
+        const key = e.key.toLowerCase();
+
         // Ctrl+Z: 撤销
-        if (e.ctrlKey && e.key === 'z' && !e.altKey) {
+        if (e.ctrlKey && key === 'z' && !e.shiftKey && !e.altKey) {
             e.preventDefault();
             history.undo();
         }
 
-        // Ctrl+Alt+Z: 重做
-        if (e.ctrlKey && e.altKey && e.key === 'z') {
+        // Ctrl+Shift+Z 或 Ctrl+Y: 重做
+        if ((e.ctrlKey && e.shiftKey && key === 'z') || (e.ctrlKey && key === 'y')) {
             e.preventDefault();
             history.redo();
         }
@@ -278,13 +427,30 @@ document.addEventListener('DOMContentLoaded', function () {
                 const activeObjects = canvas.getActiveObjects();
                 if (activeObjects && activeObjects.length > 0) {
                     e.preventDefault();
+                    // 在删除前保存状态
+                    history.saveState();
                     activeObjects.forEach(obj => {
                         canvas.remove(obj);
                     });
                     canvas.discardActiveObject();
                     canvas.renderAll();
-                    history.saveState();
                     console.log('🗑️ 删除了', activeObjects.length, '个对象');
+                }
+            }
+        }
+
+        // Ctrl+A: 全选
+        if (e.ctrlKey && key === 'a' && !isInputField) {
+            e.preventDefault();
+            if (canvas) {
+                canvas.discardActiveObject();
+                const objects = canvas.getObjects().filter(obj =>
+                    obj.type === 'textbox' || obj.type === 'i-text' || obj.type === 'rect'
+                );
+                if (objects.length > 0) {
+                    const selection = new fabric.ActiveSelection(objects, { canvas: canvas });
+                    canvas.setActiveObject(selection);
+                    canvas.requestRenderAll();
                 }
             }
         }
@@ -923,6 +1089,37 @@ document.addEventListener('DOMContentLoaded', function () {
         console.log('✅ Bind Add Text Top Button');
     }
 
+    // 🔑 绑定"添加矩形"按钮
+    const addRectBtn = document.getElementById('add-rect-btn');
+    if (addRectBtn) {
+        addRectBtn.addEventListener('click', function () {
+            if (typeof addRectangleToCanvas === 'function') {
+                addRectangleToCanvas();
+            } else {
+                alert('请先上传并翻译图片');
+            }
+        });
+        console.log('✅ Bind Add Rectangle Button');
+    }
+
+    // 🔑 矩形属性控件事件
+    document.getElementById('rect-fill-color')?.addEventListener('input', updateSelectedRectFill);
+    document.getElementById('rect-stroke-color')?.addEventListener('input', updateSelectedRectStroke);
+    document.getElementById('rect-stroke-width')?.addEventListener('input', updateSelectedRectStrokeWidth);
+    document.getElementById('rect-corner-radius')?.addEventListener('input', updateSelectedRectCornerRadius);
+
+    // 🔑 撤销/重做按钮事件
+    const undoBtn = document.getElementById('undoBtn');
+    const redoBtn = document.getElementById('redoBtn');
+    if (undoBtn) {
+        undoBtn.addEventListener('click', () => history.undo());
+    }
+    if (redoBtn) {
+        redoBtn.addEventListener('click', () => history.redo());
+    }
+
+    // 注意：键盘快捷键已在第 294-331 行绑定，不重复绑定
+
     // ========== 右侧面板切换逻辑 ==========
     // 显示编辑面板或下载面板
     window.showRightPanel = function (type) {
@@ -983,6 +1180,9 @@ function initCanvas() {
         selectionBackgroundColor: 'rgba(168, 85, 247, 0.1)'
     });
 
+    // 🔑 设置矩形选择监听器
+    setupRectSelectionListener();
+
     // ========== 智能吸附系统（优化版） ==========
     // 画布：只吸附到中心线
     // 文字：吸附到其他文字的边缘和中心
@@ -1028,14 +1228,23 @@ function initCanvas() {
         const objRight = objLeft + objWidth;
         const objBottom = objTop + objHeight;
 
-        // ========== 画布吸附 (仅上下居中) ==========
+        // ========== 画布吸附 (水平和垂直居中) ==========
         const canvasCenterX = canvasWidth / 2;
         const canvasCenterY = canvasHeight / 2;
 
         let snappedX = false;
         let snappedY = false;
 
-        // 画布垂直居中吸附 (Y轴) - 用户点名保留
+        // 画布水平居中吸附 (X轴) - 竖线
+        if (Math.abs(objCenterX - canvasCenterX) < SNAP_THRESHOLD) {
+            obj.set('left', canvasCenterX - objWidth / 2);
+            const line = createSnapLine([canvasCenterX, 0, canvasCenterX, canvasHeight], '#00ff88');
+            canvas.add(line);
+            verticalLines.push(line);
+            snappedX = true;
+        }
+
+        // 画布垂直居中吸附 (Y轴) - 横线
         if (Math.abs(objCenterY - canvasCenterY) < SNAP_THRESHOLD) {
             obj.set('top', canvasCenterY - objHeight / 2);
             const line = createSnapLine([0, canvasCenterY, canvasWidth, canvasCenterY], '#00ff88');
@@ -1148,9 +1357,28 @@ function initCanvas() {
         obj.setCoords();
     });
 
-    // 移动结束时移除辅助线
+    // 移动/缩放结束时记录状态
     canvas.on('object:modified', function () {
         removeSnapLines();
+        history.saveState();
+    });
+
+    // 🔑 新增：对象添加/删除时记录状态
+    canvas.on('object:added', function (e) {
+        // 如果是撤销重做或初始化过程，isPerformingAction 为 true，不会触发重复保存
+        if (e.target && !e.target.excludeFromExport) {
+            history.saveState();
+        }
+    });
+
+    canvas.on('object:removed', function (e) {
+        if (e.target && !e.target.excludeFromExport) {
+            history.saveState();
+        }
+    });
+
+    // 🔑 新增：文本内容修改时记录状态
+    canvas.on('text:changed', function () {
         history.saveState();
     });
 
@@ -1198,26 +1426,6 @@ function initCanvas() {
         // 🔑 恢复提示显示
         const hint = document.getElementById('text-edit-hint');
         if (hint) hint.style.display = 'block';
-    });
-
-    // 添加键盘快捷键
-    document.addEventListener('keydown', function (e) {
-        if (e.ctrlKey) {
-            if (e.key === 'a') {
-                e.preventDefault();
-                if (canvas) {
-                    canvas.discardActiveObject();
-                    const objects = canvas.getObjects().filter(obj =>
-                        obj.type === 'textbox' || obj.type === 'i-text'
-                    );
-                    if (objects.length > 0) {
-                        const selection = new fabric.ActiveSelection(objects, { canvas: canvas });
-                        canvas.setActiveObject(selection);
-                        canvas.requestRenderAll();
-                    }
-                }
-            }
-        }
     });
 
     return canvas;
@@ -1548,20 +1756,28 @@ function switchLang(langCode) {
                 'selectable', 'hasControls', 'originalStyle', 'padding', 'borderColor',
                 'cornerColor', 'cornerSize', 'transparentCorners', 'splitByGrapheme',
                 'breakWords', 'lockScalingFlip', 'fontSize', 'fontFamily', 'fontWeight',
-                'fontStyle', 'fill', 'stroke', 'strokeWidth', 'textAlign', 'charSpacing', 'lineHeight'
+                'fontStyle', 'fill', 'stroke', 'strokeWidth', 'paintFirst', 'textAlign', 'charSpacing', 'lineHeight',
+                'rx', 'ry', 'isUserRect', '_originalRx', '_originalRy'
             ]);
             console.log('✅ 切换语言前保存画布状态:', appState.currentLang, appState.currentIndex);
         }
+        // 🔑 保存当前语言的图片索引
+        currentLangData.lastIndex = appState.currentIndex;
     } else if (appState.syncLock) {
         console.log('🔒 同步锁激活，跳过保存当前画布状态');
     }
 
-    appState.currentLang = langCode;
-    appState.currentIndex = 0;
+    // 🔑 恢复目标语言的上次查看索引，如果没有则默认为0
+    const targetLangData = appState.translations[langCode];
+    const restoredIndex = targetLangData.lastIndex !== undefined ? targetLangData.lastIndex : 0;
 
-    // 🔑 切换语言时清空撤销历史（防止撤销到其他语言的状态）
-    if (history && typeof history.clear === 'function') {
-        history.clear();
+    appState.currentLang = langCode;
+    appState.currentIndex = restoredIndex;
+    console.log(`🔄 切换到语言 ${langCode}，恢复到图片索引 ${restoredIndex}`);
+
+    // 🔑 更新撤销/重做按钮状态
+    if (history && typeof history.updateButtonStates === 'function') {
+        history.updateButtonStates();
     }
 
     // 重新渲染标签和缩略图
@@ -1572,16 +1788,17 @@ function switchLang(langCode) {
     renderLangTabs(selectedLangs);
     renderMultiLangThumbnails();
 
-    // 加载第一张该语言的图片
+    // 加载恢复索引的图片
     if (appState.translations[langCode].images.length > 0) {
-        // 🔑 调试：检查目标语言的 canvasData 状态
-        const targetImg = appState.translations[langCode].images[0];
-        console.log(`🔍 切换到 ${langCode}，目标图片 canvasData:`, {
+        // 确保索引不超出范围
+        const safeIndex = Math.min(restoredIndex, appState.translations[langCode].images.length - 1);
+        const targetImg = appState.translations[langCode].images[safeIndex];
+        console.log(`🔍 切换到 ${langCode}，目标图片 ${safeIndex}:`, {
             hasData: !!targetImg?.canvasData,
             objectsCount: targetImg?.canvasData?.objects?.length || 0,
             firstText: targetImg?.canvasData?.objects?.[0]?.text?.substring(0, 30)
         });
-        loadMultiLangImageToCanvas(langCode, 0);
+        loadMultiLangImageToCanvas(langCode, safeIndex);
     }
 }
 
@@ -1589,6 +1806,9 @@ function switchLang(langCode) {
 async function loadMultiLangImageToCanvas(langCode, index) {
     const langData = appState.translations[langCode];
     if (!langData || !langData.images[index]) return;
+
+    // 🔑 锁定历史保存，防止加载大量对象时产生多余历史点
+    if (history) history.isSavingDisabled = true;
 
     const imgObj = langData.images[index];
     if (!imgObj.result || !imgObj.result.success) return;
@@ -1646,11 +1866,11 @@ async function loadMultiLangImageToCanvas(langCode, index) {
 
     if (hasValidCanvasData) {
         console.log("🔄 恢复已保存的画布状态...", langCode, index);
-        // 显示所有文本框的字号
-        const allFontSizes = imgObj.canvasData.objects
-            .filter(o => o.type === 'textbox')
-            .map(o => o.fontSize);
-        console.log(`📦 canvasData 详情: fontSizes=[${allFontSizes.join(', ')}]`);
+        // 显示所有文本框的样式信息（用于调试）
+        const allStyles = imgObj.canvasData.objects
+            .filter(o => o.type === 'textbox' || o.type === 'i-text')
+            .map(o => ({ fill: o.fill, stroke: o.stroke, strokeWidth: o.strokeWidth, fontSize: o.fontSize }));
+        console.log(`📦 canvasData 详情:`, allStyles);
 
         // 🔑 先加载背景
         await loadImageToCanvas(bgImageUrl);
@@ -1664,27 +1884,108 @@ async function loadMultiLangImageToCanvas(langCode, index) {
             objectsToRemove.forEach(obj => canvas.remove(obj));
             console.log(`🗑️ 已清除 ${objectsToRemove.length} 个旧对象`);
 
-            // 从JSON恢复对象
-            fabric.util.enlivenObjects(savedObjects, function (enlivenedObjects) {
-                console.log(`✨ 反序列化了 ${enlivenedObjects.length} 个对象`);
-                enlivenedObjects.forEach((obj, i) => {
-                    console.log(`  对象${i}: fontSize=${obj.fontSize}, fill=${obj.fill}, text=${obj.text?.substring(0, 20)}`);
-                    // 🔑 强制覆盖颜色样式为紫色 (以防加载的是旧数据)
-                    if (obj.type === 'textbox' || obj.type === 'i-text') {
-                        obj.set({
+            // 手动创建对象（替代 enlivenObjects）
+            try {
+                savedObjects.forEach((objData, i) => {
+                    let fabricObj = null;
+
+                    if (objData.type === 'textbox' || objData.type === 'i-text' || objData.type === 'text') {
+                        // 🔑 关键修复：使用显式检查防止颜色被默认值覆盖
+                        const fillColor = objData.fill !== undefined ? objData.fill : '#000000';
+                        const strokeColor = objData.stroke !== undefined ? objData.stroke : null;
+                        const strokeWidthVal = objData.strokeWidth !== undefined ? objData.strokeWidth : 0;
+
+                        fabricObj = new fabric.Textbox(objData.text || '', {
+                            left: objData.left || 0,
+                            top: objData.top || 0,
+                            width: objData.width || 200,
+                            // 文本属性
+                            fontSize: objData.fontSize || 16,
+                            fontFamily: objData.fontFamily || 'Arial',
+                            fontWeight: objData.fontWeight || 'normal',
+                            fontStyle: objData.fontStyle || 'normal',
+                            fill: fillColor,
+                            textAlign: objData.textAlign || 'left',
+                            lineHeight: objData.lineHeight || 1.16,
+                            charSpacing: objData.charSpacing || 0,
+                            // 描边属性 - 🔑 关键修复：添加 paintFirst
+                            stroke: strokeColor,
+                            strokeWidth: strokeWidthVal,
+                            paintFirst: objData.paintFirst || 'fill',
+                            // 通用属性
+                            scaleX: objData.scaleX || 1,
+                            scaleY: objData.scaleY || 1,
+                            angle: objData.angle || 0,
+                            // 控制属性
                             borderColor: '#a855f7',
                             cornerColor: '#a855f7',
                             cornerSize: 10,
                             transparentCorners: false
                         });
+                    } else if (objData.type === 'rect') {
+                        fabricObj = new fabric.Rect({
+                            left: objData.left || 0,
+                            top: objData.top || 0,
+                            width: objData.width || 100,
+                            height: objData.height || 50,
+                            fill: objData.fill || '#000000',
+                            stroke: objData.stroke || null,
+                            strokeWidth: objData.strokeWidth || 0,
+                            rx: objData.rx || 0,
+                            ry: objData.ry || 0,
+                            scaleX: objData.scaleX || 1,
+                            scaleY: objData.scaleY || 1,
+                            angle: objData.angle || 0,
+                            // 自定义属性
+                            isUserRect: true,  // 强制标记
+                            _originalRx: objData._originalRx || objData.rx || 0,
+                            _originalRy: objData._originalRy || objData.ry || 0,
+                            // 控制属性
+                            borderColor: '#a855f7',
+                            cornerColor: '#a855f7',
+                            cornerSize: 10,
+                            transparentCorners: false,
+                            lockUniScaling: false
+                        });
+
+                        // 🔑 重新绑定矩形缩放监听器
+                        fabricObj.on('scaling', function () {
+                            const originalRx = this._originalRx || 0;
+                            const originalRy = this._originalRy || 0;
+                            this.set('rx', originalRx);
+                            this.set('ry', originalRy);
+                        });
+
+                        fabricObj.on('modified', function () {
+                            if (this.scaleX !== 1 || this.scaleY !== 1) {
+                                const newWidth = this.width * this.scaleX;
+                                const newHeight = this.height * this.scaleY;
+                                this.set({
+                                    width: newWidth,
+                                    height: newHeight,
+                                    scaleX: 1,
+                                    scaleY: 1
+                                });
+                                this.setCoords();
+                            }
+                        });
                     }
-                    canvas.add(obj);
+
+                    if (fabricObj) {
+                        canvas.add(fabricObj);
+                        console.log(`  恢复对象${i}: type=${objData.type}, fill=${objData.fill}, stroke=${objData.stroke}, strokeWidth=${objData.strokeWidth}`);
+                    }
                 });
+
                 canvas.renderOnAddRemove = true;
                 canvas.renderAll();
-                console.log("✅ 画布状态恢复完成");
+                console.log(`✅ 画布状态手动恢复完成，共 ${savedObjects.length} 个对象`);
                 resolve();
-            });
+
+            } catch (err) {
+                console.error("❌ 手动恢复对象失败:", err);
+                resolve(); // 即使失败也为了流程继续resolve
+            }
         });
     } else {
         // 首次加载或无效数据：设置背景并绘制文本
@@ -1710,17 +2011,22 @@ async function loadMultiLangImageToCanvas(langCode, index) {
     const resultEmpty = document.getElementById('result-empty');
     if (resultEmpty) resultEmpty.style.display = 'none';
 
-    // 🔑 只在首次加载时保存初始状态（避免覆盖用户修改）
-    if (!imgObj.canvasData) {
-        saveInitialState();
-        imgObj.canvasData = canvas.toJSON([
-            'left', 'top', 'width', 'height', 'scaleX', 'scaleY', 'angle',
-            'selectable', 'hasControls', 'originalStyle', 'padding', 'borderColor',
-            'cornerColor', 'cornerSize', 'transparentCorners', 'splitByGrapheme',
-            'breakWords', 'lockScalingFlip', 'fontSize', 'fontFamily', 'fontWeight',
-            'fontStyle', 'fill', 'stroke', 'strokeWidth', 'textAlign', 'charSpacing', 'lineHeight'
-        ]);
-        console.log('✅ 初始画布状态已保存:', langCode, index);
+    // 🔑 统一调用一次适应屏幕，避免加载背景和加载对象时多次缩放
+    if (typeof fitToScreen === 'function') fitToScreen();
+
+    // 🔑 加载完成，解锁保存
+    if (history) history.isSavingDisabled = false;
+
+    // 🔑 如果这是第一次加载（没有历史记录），保存初始状态
+    const historyData = history.getImageHistory();
+    if (historyData && historyData.undoStack.length === 0) {
+        history.saveState();
+        console.log('✅ 保存初始历史记录 (v57)');
+    }
+
+    // 🔑 更新撤销/重做按钮状态
+    if (history && typeof history.updateButtonStates === 'function') {
+        history.updateButtonStates();
     }
 
     // 自动选中第一个文本框
@@ -1762,7 +2068,8 @@ function renderMultiLangThumbnails() {
                             'selectable', 'hasControls', 'originalStyle', 'padding', 'borderColor',
                             'cornerColor', 'cornerSize', 'transparentCorners', 'splitByGrapheme',
                             'breakWords', 'lockScalingFlip', 'fontSize', 'fontFamily', 'fontWeight',
-                            'fontStyle', 'fill', 'stroke', 'strokeWidth', 'textAlign', 'charSpacing', 'lineHeight'
+                            'fontStyle', 'fill', 'stroke', 'strokeWidth', 'paintFirst', 'textAlign', 'charSpacing', 'lineHeight',
+                            'rx', 'ry', 'isUserRect', '_originalRx', '_originalRy'
                         ]);
                         console.log('✅ 保存画布状态:', appState.currentLang, appState.currentIndex);
                     }
@@ -2032,19 +2339,6 @@ function loadImageToCanvas(url) {
                 if (canvasElement) {
                     canvasElement.style.width = '100%';
                     canvasElement.style.height = '100%';
-                    // canvasElement.style.maxWidth = 'none';
-                    // canvasElement.style.maxHeight = 'none';
-                }
-
-                // 自动适应屏幕
-                if (typeof fitToScreen === 'function') {
-                    fitToScreen();
-                } else {
-                    // 如果函数还没定义，尝试模拟点击适应按钮
-                    setTimeout(() => {
-                        const zoomFitBtn = document.getElementById('zoomFit');
-                        if (zoomFitBtn) zoomFitBtn.click();
-                    }, 100);
                 }
 
                 resolve();
@@ -2302,6 +2596,9 @@ function drawTextBoxes(textPositions, translations) {
         return;
     }
 
+    // 🔑 锁定保存，防止批量添加触发无数次 history.saveState
+    if (history) history.isSavingDisabled = true;
+
     console.log(`开始绘制${textPositions.length}个文本框`);
 
     // 清除现有文本
@@ -2313,34 +2610,25 @@ function drawTextBoxes(textPositions, translations) {
 
     // 直接绘制，使用后端提供的样式
     textPositions.forEach((item, index) => {
+        // ... (绘制逻辑)
         let translatedText = "";
-
-        // 获取翻译文本
         if (translations && translations[index]) {
             translatedText = translations[index];
         } else if (item.text) {
             translatedText = item.text;
         }
 
-        if (!translatedText) {
-            console.warn(`文本 #${index} 没有翻译内容`);
-            return;
-        }
-
-        try {
-            // 🔑 使用通用函数绘制，确保一致性
-            addTextboxToCanvas(canvas, item, translatedText, index);
-        } catch (e) {
-            console.error(`绘制文本框 #${index} 失败:`, e);
+        if (translatedText) {
+            try {
+                addTextboxToCanvas(canvas, item, translatedText, index);
+            } catch (e) {
+                console.error(`绘制文本框 #${index} 失败:`, e);
+            }
         }
     });
 
+    if (history) history.isSavingDisabled = false; // 解锁
     canvas.renderAll();
-
-    // 保存初始状态到历史记录
-    if (history && typeof history.saveState === 'function') {
-        setTimeout(() => history.saveState(), 500);
-    }
 }
 
 // 增强的文本颜色提取函数 - 优化版
@@ -2816,37 +3104,18 @@ async function switchImage(index) {
             // 由于已经在外部设置了src，这里不需要重新设置
             // originalPreview.src = nextImg.url; 
 
-            // 4. 加载结果 (如果有)
-            if (nextImg.status === 'done' && nextImg.result) {
-                try {
-                    await loadProcessedImageToCanvas(nextImg);
-
-                    // 🔑 自动选中第一个文本框 (优化体验)
-                    if (canvas) {
-                        const texts = canvas.getObjects('textbox');
-                        if (texts && texts.length > 0) {
-                            // 选中第一个
-                            canvas.setActiveObject(texts[0]);
-                            canvas.renderAll();
-                        }
-                    }
-                } catch (e) {
-                    console.error("加载已处理图片失败", e);
-                }
-            } else {
-                // 未处理：隐藏画布，显示原图
-                document.getElementById('fabricCanvasContainer').style.display = 'none';
-                // 隐藏编辑面板
-                const textStyleEditor = document.getElementById('text-style-editor');
-                const savePanel = document.getElementById('save-panel');
-                const tipCard = document.getElementById('tipCard');
-
-                if (textStyleEditor) textStyleEditor.style.display = 'none';
-                if (savePanel) savePanel.style.display = 'none';
-                if (tipCard) tipCard.style.display = 'block';
+            // 4. 统一调用多语言加载函数数据项内容数据项内容数据项内容数据项内容数据项内容数据项内容数据项内容
+            // 无论是否有结果，都调用它来处理背景、画布和历史锁定数据项内容数据项内容数据项内容数据项内容数据项内容数据项内容数据项内容
+            try {
+                await loadMultiLangImageToCanvas(appState.currentLang, index);
+            } catch (e) {
+                console.error("加载图片失败:", e);
             }
+
             resolve();
         };
+        // 🔑 关键修复：指定 crossOrigin 否则加载本地/外部资源可能冲突
+        tempImg.crossOrigin = "anonymous";
         tempImg.src = nextImg.url;
     });
 }
@@ -3337,7 +3606,8 @@ async function syncStylesToAllLangs() {
         'selectable', 'hasControls', 'originalStyle', 'padding', 'borderColor',
         'cornerColor', 'cornerSize', 'transparentCorners', 'splitByGrapheme',
         'breakWords', 'lockScalingFlip', 'fontSize', 'fontFamily', 'fontWeight',
-        'fontStyle', 'fill', 'stroke', 'strokeWidth', 'textAlign', 'charSpacing', 'lineHeight'
+        'fontStyle', 'fill', 'stroke', 'strokeWidth', 'paintFirst', 'textAlign', 'charSpacing', 'lineHeight',
+        'rx', 'ry', 'isUserRect', '_originalRx', '_originalRy'
     ]);
 
     // 🔑 调试：显示源 JSON 的结构
@@ -3628,7 +3898,7 @@ async function syncStylesToEverything() {
         'selectable', 'hasControls', 'originalStyle', 'padding', 'borderColor',
         'cornerColor', 'cornerSize', 'transparentCorners', 'splitByGrapheme',
         'breakWords', 'lockScalingFlip', 'fontSize', 'fontFamily', 'fontWeight',
-        'fontStyle', 'fill', 'stroke', 'strokeWidth', 'textAlign', 'charSpacing', 'lineHeight'
+        'fontStyle', 'fill', 'stroke', 'strokeWidth', 'paintFirst', 'textAlign', 'charSpacing', 'lineHeight'
     ]);
 
     // 立即保存当前这张图
@@ -4221,6 +4491,7 @@ document.addEventListener('DOMContentLoaded', () => {
             canvasContainer.style.maxWidth = 'none';
             canvasContainer.style.maxHeight = 'none';
             canvasContainer.style.transform = 'none';
+            canvasContainer.style.transition = 'none'; // 🔑 强制禁用动画
         }
 
         // 还需要调整内部Fabric wrapper的大小
@@ -4245,6 +4516,7 @@ document.addEventListener('DOMContentLoaded', () => {
             canvasEl.style.width = `${newWidth}px`;
             canvasEl.style.height = `${newHeight}px`;
             canvasEl.style.maxWidth = 'none';
+            canvasEl.style.transition = 'none'; // 🔑 强制禁用动画
         }
     }
 
@@ -4439,3 +4711,958 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
 }); // Close DOMContentLoaded
+
+// ========== 同步到文件夹功能模块 ==========
+
+// 同步路径配置（从 localStorage 加载）
+const syncPaths = JSON.parse(localStorage.getItem('xobi_syncPaths') || '{}');
+
+// 语言名称映射
+const LANG_NAMES = {
+    'en': '🇺🇸 英语',
+    'th': '🇹🇭 泰语',
+    'id': '🇮🇩 印尼语',
+    'vi': '🇻🇳 越南语',
+    'ru': '🇷🇺 俄语',
+    'ja': '🇯🇵 日语',
+    'ko': '🇰🇷 韩语',
+    'zh': '🇨🇳 中文'
+};
+
+// 保存路径配置到 localStorage
+function saveSyncPaths() {
+    localStorage.setItem('xobi_syncPaths', JSON.stringify(syncPaths));
+}
+
+// 打开同步设置模态框
+function openSyncModal() {
+    const modal = document.getElementById('syncModal');
+    if (modal) {
+        modal.classList.add('show');
+        renderSyncLangPaths();
+    }
+}
+
+// 关闭同步设置模态框
+function closeSyncModal() {
+    const modal = document.getElementById('syncModal');
+    if (modal) {
+        modal.classList.remove('show');
+    }
+}
+
+// 渲染语言路径配置列表
+function renderSyncLangPaths() {
+    const container = document.getElementById('sync-lang-paths');
+    const emptyHint = document.getElementById('sync-empty-hint');
+
+    if (!container) return;
+
+    // 获取已翻译的语言列表
+    const translatedLangs = appState.translations ? Object.keys(appState.translations) : [];
+
+    if (translatedLangs.length === 0) {
+        if (emptyHint) emptyHint.style.display = 'block';
+        return;
+    }
+
+    if (emptyHint) emptyHint.style.display = 'none';
+
+    // 清空容器（保留空提示元素）
+    const rows = container.querySelectorAll('.sync-lang-row');
+    rows.forEach(row => row.remove());
+
+    // 为每种语言生成配置行
+    translatedLangs.forEach(langCode => {
+        const langName = LANG_NAMES[langCode] || langCode;
+        const savedPath = syncPaths[langCode] || '';
+
+        const row = document.createElement('div');
+        row.className = 'sync-lang-row';
+        row.innerHTML = `
+            <div class="sync-lang-label">${langName}</div>
+            <div class="sync-path-wrapper">
+                <input type="text" 
+                    class="sync-path-input" 
+                    id="sync-path-${langCode}"
+                    placeholder="例如: D:\\项目\\${langCode}"
+                    value="${savedPath}"
+                    data-lang="${langCode}">
+                <button class="sync-folder-picker" onclick="selectFolder('${langCode}')" title="选择文件夹">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                </button>
+            </div>
+            <button class="sync-btn" onclick="syncSingleLang('${langCode}', this)">同步</button>
+        `;
+
+        container.appendChild(row);
+
+        // 绑定路径输入事件 - 自动保存和验证
+        const input = row.querySelector('.sync-path-input');
+        input.addEventListener('change', async function () {
+            const path = this.value.trim();
+            syncPaths[langCode] = path;
+            saveSyncPaths();
+
+            // 验证路径
+            if (path) {
+                const valid = await validatePath(path);
+                this.classList.remove('valid', 'invalid');
+                this.classList.add(valid ? 'valid' : 'invalid');
+            } else {
+                this.classList.remove('valid', 'invalid');
+            }
+        });
+    });
+}
+
+// 🔑 调用原生对话框选择文件夹
+async function selectFolder(langCode) {
+    try {
+        const response = await fetch('/api/select-folder', {
+            method: 'POST'
+        });
+        const result = await response.json();
+
+        if (result.success && result.path) {
+            const input = document.getElementById(`sync-path-${langCode}`);
+            if (input) {
+                input.value = result.path;
+                // 手动触发 change 事件以保存路径并验证
+                input.dispatchEvent(new Event('change'));
+            }
+        } else if (result.error) {
+            alert('选择文件夹出错: ' + result.error);
+        }
+    } catch (e) {
+        console.error('选择文件夹失败:', e);
+        alert('无法连接到后端服务，请确保已启动 Python 后端。');
+    }
+}
+
+// 验证路径是否有效
+async function validatePath(path) {
+    try {
+        const response = await fetch('/api/validate-path', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: path })
+        });
+        const result = await response.json();
+        return result.valid === true;
+    } catch (e) {
+        console.error('验证路径失败:', e);
+        return false;
+    }
+}
+
+// 同步单个语言到指定文件夹
+async function syncSingleLang(langCode, btnElement) {
+    const pathInput = document.getElementById(`sync-path-${langCode}`);
+    const targetPath = pathInput ? pathInput.value.trim() : '';
+
+    if (!targetPath) {
+        alert('请先输入目标文件夹路径');
+        return;
+    }
+
+    // 获取该语言的翻译数据
+    const langData = appState.translations ? appState.translations[langCode] : null;
+    if (!langData || !langData.images) {
+        alert('找不到该语言的翻译数据');
+        return;
+    }
+
+    const doneImages = langData.images.filter(img => img.status === 'done' && img.result);
+    if (doneImages.length === 0) {
+        alert('该语言没有已完成的翻译');
+        return;
+    }
+
+    // 更新按钮状态
+    const originalText = btnElement.innerHTML;
+    btnElement.innerHTML = '正在导出...';
+    btnElement.classList.add('syncing');
+    btnElement.disabled = true;
+
+    let successCount = 0;
+    let failCount = 0;
+
+    try {
+        console.log(`🚀 开始同步语言 [${langCode}] 到:`, targetPath);
+        for (let i = 0; i < doneImages.length; i++) {
+            const imgObj = doneImages[i];
+            // 🔑 修复：正确获取原始文件名 (langData.images 中的对象包含 originalImg)
+            const fileMeta = imgObj.originalImg ? imgObj.originalImg.file : imgObj.file;
+            const originalFilename = fileMeta ? fileMeta.name : `image_${i + 1}.png`;
+
+            // 更新显示进度
+            btnElement.innerHTML = `同步中 ${i + 1}/${doneImages.length}`;
+            showSyncStatus(`${LANG_NAMES[langCode] || langCode}: 正在同步 (${i + 1}/${doneImages.length}) - ${originalFilename}`);
+
+            // 导出图片为 Base64
+            const imageData = await exportImageForSync(imgObj);
+            if (!imageData) {
+                console.warn(`⚠️ 跳过图片 ${originalFilename}: 无法导出`);
+                failCount++;
+                continue;
+            }
+
+            // 调用后端 API 同步文件
+            try {
+                const response = await fetch('/api/sync-to-folder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        target_path: targetPath,
+                        filename: originalFilename,
+                        image_data: imageData
+                    })
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    successCount++;
+                    console.log(`✅ 同步成功: ${originalFilename}`);
+                } else {
+                    failCount++;
+                    console.error(`❌ 后端报错: ${originalFilename} - ${result.error}`);
+                }
+            } catch (e) {
+                failCount++;
+                console.error(`❌ 请求失败: ${originalFilename}`, e);
+            }
+
+            // 毫秒级微小延迟，释放主线程保持 UI 响应
+            await new Promise(r => setTimeout(r, 50));
+        }
+
+        // 显示最终结果
+        if (failCount === 0) {
+            btnElement.innerHTML = '✓ 已完成';
+            btnElement.classList.add('success');
+            pathInput.classList.add('valid');
+        } else {
+            btnElement.innerHTML = `${successCount}/${doneImages.length}`;
+            btnElement.classList.add('error');
+        }
+
+        showSyncStatus(`${LANG_NAMES[langCode] || langCode}: 同步结束，成功 ${successCount} 张，失败 ${failCount} 张`, failCount > 0);
+
+    } catch (e) {
+        console.error('🔥 同步过程崩溃:', e);
+        btnElement.innerHTML = '同步失败';
+        btnElement.classList.add('error');
+        showSyncStatus(`严重错误: ${e.message}`, true);
+    } finally {
+        btnElement.classList.remove('syncing');
+        btnElement.disabled = false;
+
+        // 3秒后尝试恢复状态，但不强制恢复文本，保留成功/失败显示
+        setTimeout(() => {
+            if (btnElement.innerHTML === '✓ 已完成' || btnElement.classList.contains('error')) {
+                // 暂时保持状态
+            } else {
+                btnElement.innerHTML = '同步';
+                btnElement.classList.remove('success', 'error');
+            }
+        }, 3000);
+    }
+}
+
+// 一键同步全部语言 (缓存优先架构：快速！)
+async function syncAllToFolders() {
+    const syncAllBtn = document.getElementById('sync-all-btn');
+    if (!syncAllBtn) return;
+
+    // 收集所有有效路径的语言
+    const langPaths = {};
+    const translatedLangs = appState.translations ? Object.keys(appState.translations) : [];
+
+    for (const langCode of translatedLangs) {
+        const path = syncPaths[langCode];
+        if (path && path.trim()) {
+            langPaths[langCode] = path.trim();
+        }
+    }
+
+    if (Object.keys(langPaths).length === 0) {
+        alert('请至少配置一个语言的目标路径');
+        return;
+    }
+
+    // 更新按钮状态
+    const originalText = syncAllBtn.innerHTML;
+    syncAllBtn.innerHTML = '🚀 准备导出...';
+    syncAllBtn.disabled = true;
+    syncAllBtn.classList.add('syncing');
+
+    try {
+        console.log('🚀 开始缓存优先同步流程...');
+        showSyncStatus('正在收集所有翻译图片...');
+
+        // === 第一步：收集所有图片数据 ===
+        const allImages = [];
+
+        for (const langCode of Object.keys(langPaths)) {
+            const langData = appState.translations[langCode];
+            if (!langData || !langData.images) continue;
+
+            const doneImages = langData.images.filter(img => img.status === 'done' && img.result);
+
+            for (let i = 0; i < doneImages.length; i++) {
+                const imgObj = doneImages[i];
+                const fileMeta = imgObj.originalImg ? imgObj.originalImg.file : imgObj.file;
+                const filename = fileMeta ? fileMeta.name : `image_${i + 1}.png`;
+
+                syncAllBtn.innerHTML = `📤 导出 ${langCode} (${i + 1}/${doneImages.length})`;
+                showSyncStatus(`正在导出 [${LANG_NAMES[langCode] || langCode}]: ${filename}`);
+
+                const imageData = await exportImageForSync(imgObj);
+                if (imageData) {
+                    allImages.push({
+                        langCode: langCode,
+                        filename: filename,
+                        imageData: imageData
+                    });
+                }
+                await new Promise(r => setTimeout(r, 20)); // 小延迟保持UI响应
+            }
+        }
+
+        if (allImages.length === 0) {
+            throw new Error('没有可导出的图片');
+        }
+
+        // === 第二步：批量导出到缓存 ===
+        syncAllBtn.innerHTML = '📦 保存到缓存...';
+        showSyncStatus(`正在保存 ${allImages.length} 张图片到缓存...`);
+
+        const cacheResponse = await fetch('/api/export-to-cache', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ images: allImages })
+        });
+
+        const cacheResult = await cacheResponse.json();
+        if (!cacheResult.success) {
+            throw new Error('导出到缓存失败: ' + (cacheResult.error || '未知错误'));
+        }
+
+        console.log('✅ 导出到缓存完成:', cacheResult.cachePath, cacheResult.counts);
+
+        // === 第三步：从缓存替换到目标文件夹 ===
+        syncAllBtn.innerHTML = '🔄 替换文件中...';
+        showSyncStatus('正在将缓存中的文件替换到目标文件夹...');
+
+        const syncResponse = await fetch('/api/sync-from-cache', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                cachePath: cacheResult.cachePath,
+                langPaths: langPaths
+            })
+        });
+
+        const syncResult = await syncResponse.json();
+        if (!syncResult.success) {
+            throw new Error('从缓存同步失败: ' + (syncResult.error || '未知错误'));
+        }
+
+        // 统计结果
+        let totalSuccess = 0;
+        let totalFail = 0;
+        for (const langCode in syncResult.results) {
+            const r = syncResult.results[langCode];
+            totalSuccess += r.success || 0;
+            totalFail += r.fail || 0;
+        }
+
+        const msg = `✅ 同步完成！成功 ${totalSuccess} 张，失败 ${totalFail} 张`;
+        showSyncStatus(msg, totalFail > 0);
+        alert(msg + '\n\n缓存已保存为历史记录，可在"历史记录"中查看');
+
+        syncAllBtn.innerHTML = '✓ 完成';
+        syncAllBtn.classList.add('success');
+
+    } catch (e) {
+        console.error('🔥 同步过程出错:', e);
+        showSyncStatus(`同步失败: ${e.message}`, true);
+        alert('同步失败: ' + e.message);
+        syncAllBtn.innerHTML = '❌ 失败';
+        syncAllBtn.classList.add('error');
+    } finally {
+        setTimeout(() => {
+            syncAllBtn.innerHTML = originalText;
+            syncAllBtn.disabled = false;
+            syncAllBtn.classList.remove('syncing', 'success', 'error');
+        }, 3000);
+    }
+}
+
+// 导出图片为 Base64 (用于同步功能) - 使用 Fabric.js 确保与预览一致
+async function exportImageForSync(imgObj) {
+    const fileMeta = imgObj.originalImg ? imgObj.originalImg.file : imgObj.file;
+    const fileName = fileMeta ? fileMeta.name : 'Unknown';
+    console.log('🖼️ 开始导出图片用于同步:', fileName);
+
+    return new Promise((resolve) => {
+        // 设置 15 秒超时
+        const timeout = setTimeout(() => {
+            console.error(`⌛ 导出图片超时 (15s): ${fileName}`);
+            resolve(null);
+        }, 15000);
+
+        if (!imgObj.result || !imgObj.result.success) {
+            console.warn('⚠️ 图片未完成或失败，跳过');
+            clearTimeout(timeout);
+            resolve(null);
+            return;
+        }
+
+        const data = imgObj.result;
+
+        // 🚀 方法1：如果当前画布正在显示这张图，直接导出（最快最准）
+        if (appState.currentLang && appState.translations[appState.currentLang]) {
+            const currentLangImages = appState.translations[appState.currentLang].images;
+            const currentImgObj = currentLangImages[appState.currentIndex];
+            if (currentImgObj === imgObj && canvas) {
+                try {
+                    console.log('🚀 使用活跃画布直接导出');
+                    const dataURL = canvas.toDataURL({ format: 'png', quality: 1, multiplier: 1 });
+                    clearTimeout(timeout);
+                    resolve(dataURL);
+                    return;
+                } catch (e) {
+                    console.warn('活跃画布导出失败，回退:', e);
+                }
+            }
+        }
+
+        // 🎨 方法2：使用 Fabric.js StaticCanvas 精确还原
+        const bgImageUrl = data.inpainted_url;
+        if (!bgImageUrl) {
+            console.warn('⚠️ 无背景图 URL，跳过');
+            clearTimeout(timeout);
+            resolve(null);
+            return;
+        }
+
+        console.log('🔗 使用 Fabric.js StaticCanvas 渲染:', fileName);
+
+        // 加载背景图
+        const bgImg = new Image();
+        bgImg.crossOrigin = 'anonymous';
+        bgImg.src = bgImageUrl;
+
+        bgImg.onload = function () {
+            try {
+                const imgWidth = bgImg.width;
+                const imgHeight = bgImg.height;
+
+                // 创建离屏 canvas 元素
+                const tempCanvasElem = document.createElement('canvas');
+                tempCanvasElem.width = imgWidth;
+                tempCanvasElem.height = imgHeight;
+
+                // 初始化 Fabric.js StaticCanvas
+                const tempCanvas = new fabric.StaticCanvas(tempCanvasElem, {
+                    width: imgWidth,
+                    height: imgHeight,
+                    renderOnAddRemove: false
+                });
+
+                // 确保 viewportTransform 已初始化
+                if (!tempCanvas.viewportTransform) {
+                    tempCanvas.viewportTransform = [1, 0, 0, 1, 0, 0];
+                }
+
+                // 设置背景图
+                const fabricBgImg = new fabric.Image(bgImg, {
+                    originX: 'left',
+                    originY: 'top',
+                    scaleX: 1,
+                    scaleY: 1
+                });
+
+                tempCanvas.setBackgroundImage(fabricBgImg, function () {
+                    // 如果有 canvasData，手动重建对象（比 enlivenObjects 更可靠）
+                    if (imgObj.canvasData && imgObj.canvasData.objects && imgObj.canvasData.objects.length > 0) {
+                        console.log('🎨 从 canvasData 加载 ' + imgObj.canvasData.objects.length + ' 个对象');
+
+                        // 手动创建每个对象
+                        imgObj.canvasData.objects.forEach(objData => {
+                            try {
+                                let fabricObj = null;
+
+                                if (objData.type === 'textbox' || objData.type === 'i-text' || objData.type === 'text') {
+                                    // 🔑 关键修复：使用 !== undefined 防止颜色丢失
+                                    const fillColor = objData.fill !== undefined ? objData.fill : '#000000';
+                                    const strokeColor = objData.stroke !== undefined ? objData.stroke : null;
+                                    const strokeWidthVal = objData.strokeWidth !== undefined ? objData.strokeWidth : 0;
+
+                                    // 创建文本对象
+                                    fabricObj = new fabric.Textbox(objData.text || '', {
+                                        left: objData.left || 0,
+                                        top: objData.top || 0,
+                                        width: objData.width || 200,
+                                        fontSize: objData.fontSize || 16,
+                                        fontFamily: objData.fontFamily || 'Arial',
+                                        fontWeight: objData.fontWeight || 'normal',
+                                        fontStyle: objData.fontStyle || 'normal',
+                                        fill: fillColor,
+                                        stroke: strokeColor,
+                                        strokeWidth: strokeWidthVal,
+                                        paintFirst: objData.paintFirst || 'fill',
+                                        textAlign: objData.textAlign || 'left',
+                                        lineHeight: objData.lineHeight || 1.16,
+                                        charSpacing: objData.charSpacing || 0,
+                                        scaleX: objData.scaleX || 1,
+                                        scaleY: objData.scaleY || 1,
+                                        angle: objData.angle || 0
+                                    });
+                                    console.log(`  导出文本: fill=${fillColor}, stroke=${strokeColor}, strokeWidth=${strokeWidthVal}, paintFirst=${objData.paintFirst || 'fill'}`);
+                                } else if (objData.type === 'rect') {
+                                    // 🔑 矩形也使用显式检查
+                                    const fillColor = objData.fill !== undefined ? objData.fill : '#000000';
+                                    const strokeColor = objData.stroke !== undefined ? objData.stroke : null;
+                                    const strokeWidthVal = objData.strokeWidth !== undefined ? objData.strokeWidth : 0;
+
+                                    // 创建矩形对象
+                                    fabricObj = new fabric.Rect({
+                                        left: objData.left || 0,
+                                        top: objData.top || 0,
+                                        width: objData.width || 100,
+                                        height: objData.height || 50,
+                                        fill: fillColor,
+                                        stroke: strokeColor,
+                                        strokeWidth: strokeWidthVal,
+                                        rx: objData.rx || 0,
+                                        ry: objData.ry || 0,
+                                        scaleX: objData.scaleX || 1,
+                                        scaleY: objData.scaleY || 1,
+                                        angle: objData.angle || 0
+                                    });
+                                }
+
+                                if (fabricObj) {
+                                    tempCanvas.add(fabricObj);
+                                }
+                            } catch (objErr) {
+                                console.warn('创建对象失败:', objErr, objData.type);
+                            }
+                        });
+
+                        tempCanvas.renderAll();
+
+                        try {
+                            const dataURL = tempCanvas.toDataURL({ format: 'png', quality: 1 });
+                            console.log('✅ Fabric.js 导出成功:', fileName);
+                            tempCanvas.dispose();
+                            clearTimeout(timeout);
+                            resolve(dataURL);
+                        } catch (exportErr) {
+                            console.error('导出失败:', exportErr);
+                            tempCanvas.dispose();
+                            clearTimeout(timeout);
+                            resolve(null);
+                        }
+                    } else {
+                        // 没有 canvasData，使用后端数据创建文本
+                        console.log('📝 使用后端数据绘制文本');
+
+                        if (data.text_positions && data.translations) {
+                            data.text_positions.forEach((position, idx) => {
+                                const translatedText = data.translations[idx];
+                                if (!translatedText) return;
+
+                                try {
+                                    const box = position.box || position;
+                                    if (!box || !Array.isArray(box)) return;
+
+                                    const minX = Math.min(...box.map(p => p[0]));
+                                    const minY = Math.min(...box.map(p => p[1]));
+                                    const maxX = Math.max(...box.map(p => p[0]));
+                                    const maxY = Math.max(...box.map(p => p[1]));
+                                    const boxWidth = maxX - minX;
+                                    const boxHeight = maxY - minY;
+
+                                    const style = data.styles ? data.styles[idx] : {};
+                                    let fontSize = style.font_size || Math.max(12, boxHeight * 0.7);
+                                    const textColor = style.color ?
+                                        `rgb(${style.color[0]},${style.color[1]},${style.color[2]})` : '#000000';
+
+                                    const textObj = new fabric.Textbox(translatedText, {
+                                        left: minX,
+                                        top: minY,
+                                        width: boxWidth,
+                                        fontSize: fontSize,
+                                        fill: textColor,
+                                        fontFamily: 'Arial, sans-serif',
+                                        textAlign: style.align || 'left'
+                                    });
+                                    tempCanvas.add(textObj);
+                                } catch (e) {
+                                    console.error('绘制文本失败:', e);
+                                }
+                            });
+                        }
+
+                        tempCanvas.renderAll();
+
+                        try {
+                            const dataURL = tempCanvas.toDataURL({ format: 'png', quality: 1 });
+                            console.log('✅ Fabric.js 导出成功 (后端数据):', fileName);
+                            tempCanvas.dispose();
+                            clearTimeout(timeout);
+                            resolve(dataURL);
+                        } catch (exportErr) {
+                            console.error('导出失败:', exportErr);
+                            tempCanvas.dispose();
+                            clearTimeout(timeout);
+                            resolve(null);
+                        }
+                    }
+                }, { crossOrigin: 'anonymous' });
+
+            } catch (err) {
+                console.error('Fabric.js StaticCanvas 渲染失败:', err);
+                clearTimeout(timeout);
+                resolve(null);
+            }
+        };
+
+        bgImg.onerror = () => {
+            console.error('加载背景图失败:', bgImageUrl);
+            clearTimeout(timeout);
+            resolve(null);
+        };
+    });
+}
+
+// 显示同步状态
+function showSyncStatus(message, isError = false) {
+    const status = document.getElementById('sync-status');
+    if (status) {
+        status.textContent = message;
+        status.className = 'sync-status' + (isError ? ' error' : '');
+        status.style.display = 'block';
+
+        // 5秒后自动隐藏
+        setTimeout(() => {
+            status.style.display = 'none';
+        }, 5000);
+    }
+}
+
+// ========== 历史记录功能 ==========
+
+// 切换历史记录面板显示
+function toggleHistoryPanel() {
+    const panel = document.getElementById('sync-history-panel');
+    if (!panel) return;
+
+    if (panel.style.display === 'none') {
+        panel.style.display = 'block';
+        loadSyncHistory();
+    } else {
+        panel.style.display = 'none';
+    }
+}
+
+// 加载同步历史记录
+async function loadSyncHistory() {
+    const listContainer = document.getElementById('sync-history-list');
+    if (!listContainer) return;
+
+    listContainer.innerHTML = '<div class="sync-history-empty">加载中...</div>';
+
+    try {
+        const response = await fetch('/api/list-sync-history');
+        const result = await response.json();
+
+        if (!result.success || !result.history || result.history.length === 0) {
+            listContainer.innerHTML = '<div class="sync-history-empty">暂无历史记录</div>';
+            return;
+        }
+
+        listContainer.innerHTML = '';
+
+        for (const item of result.history) {
+            const langInfo = Object.entries(item.langs || {})
+                .map(([code, count]) => `${LANG_NAMES[code] || code}: ${count}张`)
+                .join(', ');
+
+            const div = document.createElement('div');
+            div.className = 'sync-history-item';
+            div.innerHTML = `
+                <div class="sync-history-info">
+                    <div class="sync-history-name">${item.name}</div>
+                    <div class="sync-history-meta">${langInfo} | ${item.sizeMB}MB</div>
+                </div>
+                <div class="sync-history-actions">
+                    <button title="打开文件夹" onclick="openSyncFolder('${item.path.replace(/\\/g, '\\\\')}')">📁</button>
+                    <button class="delete" title="删除" onclick="deleteSyncHistory('${item.name}')">🗑️</button>
+                </div>
+            `;
+            listContainer.appendChild(div);
+        }
+    } catch (e) {
+        console.error('加载历史记录失败:', e);
+        listContainer.innerHTML = '<div class="sync-history-empty">加载失败</div>';
+    }
+}
+
+// 删除同步历史记录
+async function deleteSyncHistory(name) {
+    if (!confirm(`确定要删除 "${name}" 吗？`)) return;
+
+    try {
+        const response = await fetch('/api/delete-sync-history', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name })
+        });
+
+        const result = await response.json();
+        if (result.success) {
+            loadSyncHistory(); // 刷新列表
+        } else {
+            alert('删除失败: ' + (result.error || '未知错误'));
+        }
+    } catch (e) {
+        console.error('删除历史记录失败:', e);
+        alert('删除失败');
+    }
+}
+
+// 在资源管理器中打开文件夹
+async function openSyncFolder(path) {
+    try {
+        await fetch('/api/open-folder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path })
+        });
+    } catch (e) {
+        console.error('打开文件夹失败:', e);
+    }
+}
+
+// 绑定同步模态框事件
+document.addEventListener('DOMContentLoaded', function () {
+    // 打开同步设置按钮
+    const syncSettingsBtn = document.getElementById('sync-settings-btn');
+    if (syncSettingsBtn) {
+        syncSettingsBtn.addEventListener('click', openSyncModal);
+    }
+
+    // 关闭同步设置按钮
+    const syncCloseBtn = document.getElementById('sync-close');
+    if (syncCloseBtn) {
+        syncCloseBtn.addEventListener('click', closeSyncModal);
+    }
+
+    // 点击模态框背景关闭
+    const syncModal = document.getElementById('syncModal');
+    if (syncModal) {
+        syncModal.addEventListener('click', function (e) {
+            if (e.target === syncModal) {
+                closeSyncModal();
+            }
+        });
+    }
+
+    // 一键同步全部按钮
+    const syncAllBtn = document.getElementById('sync-all-btn');
+    if (syncAllBtn) {
+        syncAllBtn.addEventListener('click', syncAllToFolders);
+    }
+});
+
+// ========== 矩形工具功能 ==========
+
+// 添加矩形到画布
+function addRectangleToCanvas() {
+    if (!canvas) {
+        alert('请先上传并翻译图片');
+        return;
+    }
+
+    const canvasWidth = canvas.getWidth();
+    const canvasHeight = canvas.getHeight();
+
+    // 创建矩形，默认放在画布中心
+    const rect = new fabric.Rect({
+        left: canvasWidth / 2 - 100,
+        top: canvasHeight / 2 - 50,
+        width: 200,
+        height: 100,
+        fill: '#000000',
+        stroke: '#ffffff',
+        strokeWidth: 0,
+        rx: 0,
+        ry: 0,
+        selectable: true,
+        hasControls: true,
+        hasBorders: true,
+        // 标记为用户添加的矩形
+        isUserRect: true,
+        // 🔑 禁止非均匀缩放，保持圆角比例
+        lockUniScaling: false,
+        // 🔑 存储原始圆角值，用于缩放时保持一致
+        _originalRx: 0,
+        _originalRy: 0
+    });
+
+    // 🔑 监听缩放事件，保持圆角不变形
+    rect.on('scaling', function () {
+        // 保持 rx/ry 不随缩放变化
+        const originalRx = this._originalRx || 0;
+        const originalRy = this._originalRy || 0;
+        this.set('rx', originalRx);
+        this.set('ry', originalRy);
+    });
+
+    // 🔑 缩放结束后，将缩放应用到宽高，并重置缩放比例
+    rect.on('modified', function () {
+        if (this.scaleX !== 1 || this.scaleY !== 1) {
+            const newWidth = this.width * this.scaleX;
+            const newHeight = this.height * this.scaleY;
+            this.set({
+                width: newWidth,
+                height: newHeight,
+                scaleX: 1,
+                scaleY: 1
+            });
+            this.setCoords();
+        }
+    });
+
+    // 🔑 临时禁用自动渲染，防止闪烁
+    const originalRenderOnAddRemove = canvas.renderOnAddRemove;
+    canvas.renderOnAddRemove = false;
+
+    canvas.add(rect);
+
+    // 🔑 将矩形置于底层（背景之上，文字之下）
+    canvas.sendToBack(rect);
+
+    // 🔑 恢复自动渲染
+    canvas.renderOnAddRemove = originalRenderOnAddRemove;
+
+    // 🔑 使用 requestAnimationFrame 确保平滑渲染
+    requestAnimationFrame(() => {
+        canvas.setActiveObject(rect);
+        canvas.renderAll();
+
+        // 保存状态（异步执行避免阻塞）
+        setTimeout(() => {
+            if (history && typeof history.saveState === 'function') {
+                history.saveState();
+            }
+        }, 0);
+    });
+
+    console.log('✅ 添加矩形到画布（置于文字底层）');
+}
+
+// 显示/隐藏矩形属性面板
+function showRectPropertiesPanel(show, rect = null) {
+    const workflowSteps = document.getElementById('workflow-steps');
+    const rectPanel = document.getElementById('rect-properties-panel');
+
+    if (show && rect) {
+        // 隐藏步骤，显示矩形面板
+        if (workflowSteps) workflowSteps.style.display = 'none';
+        if (rectPanel) {
+            rectPanel.style.display = 'flex';
+            // 更新控件值
+            document.getElementById('rect-fill-color').value = rect.fill || '#000000';
+            document.getElementById('rect-stroke-color').value = rect.stroke || '#ffffff';
+            document.getElementById('rect-stroke-width').value = rect.strokeWidth || 0;
+            document.getElementById('rect-stroke-width-val').textContent = rect.strokeWidth || 0;
+            document.getElementById('rect-corner-radius').value = rect.rx || 0;
+            document.getElementById('rect-corner-radius-val').textContent = rect.rx || 0;
+        }
+    } else {
+        // 显示步骤，隐藏矩形面板
+        if (workflowSteps) workflowSteps.style.display = 'flex';
+        if (rectPanel) rectPanel.style.display = 'none';
+    }
+}
+
+// 更新选中矩形的填充色
+function updateSelectedRectFill(e) {
+    const activeObj = canvas?.getActiveObject();
+    if (activeObj && activeObj.type === 'rect') {
+        activeObj.set('fill', e.target.value);
+        canvas.renderAll();
+    }
+}
+
+// 更新选中矩形的描边色
+function updateSelectedRectStroke(e) {
+    const activeObj = canvas?.getActiveObject();
+    if (activeObj && activeObj.type === 'rect') {
+        activeObj.set('stroke', e.target.value);
+        canvas.renderAll();
+    }
+}
+
+// 更新选中矩形的描边宽度
+function updateSelectedRectStrokeWidth(e) {
+    const val = parseInt(e.target.value);
+    document.getElementById('rect-stroke-width-val').textContent = val;
+    const activeObj = canvas?.getActiveObject();
+    if (activeObj && activeObj.type === 'rect') {
+        activeObj.set('strokeWidth', val);
+        canvas.renderAll();
+    }
+}
+
+// 更新选中矩形的圆角
+function updateSelectedRectCornerRadius(e) {
+    const val = parseInt(e.target.value);
+    document.getElementById('rect-corner-radius-val').textContent = val;
+    const activeObj = canvas?.getActiveObject();
+    if (activeObj && activeObj.type === 'rect') {
+        activeObj.set('rx', val);
+        activeObj.set('ry', val);
+        // 🔑 同时保存原始值，用于缩放时保持一致
+        activeObj._originalRx = val;
+        activeObj._originalRy = val;
+        canvas.renderAll();
+    }
+}
+
+// 监听画布选择事件以显示/隐藏矩形面板
+function setupRectSelectionListener() {
+    if (!canvas) return;
+
+    canvas.on('selection:created', function (e) {
+        const obj = e.selected?.[0];
+        if (obj && obj.type === 'rect') {
+            showRectPropertiesPanel(true, obj);
+        } else {
+            showRectPropertiesPanel(false);
+        }
+    });
+
+    canvas.on('selection:updated', function (e) {
+        const obj = e.selected?.[0];
+        if (obj && obj.type === 'rect') {
+            showRectPropertiesPanel(true, obj);
+        } else {
+            showRectPropertiesPanel(false);
+        }
+    });
+
+    canvas.on('selection:cleared', function () {
+        showRectPropertiesPanel(false);
+    });
+
+    console.log('✅ 矩形选择监听器已设置');
+}
