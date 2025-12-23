@@ -8,7 +8,9 @@ console.log('🚀 App.js 版本:', APP_VERSION);
 const appState = {
     images: [], // {id, file, url, status, result, canvasData, thumbnail}
     currentIndex: -1,
-    syncLock: false  // 🔑 同步锁：防止切换语言时覆盖同步后的数据
+    syncLock: false,
+    mobileActivePanel: null, // 'left', 'right', or null
+    currentHistoryName: null // 🔑 当前正在编辑的历史记录名称（如果有），用于覆盖保存
 };
 
 let canvas = null;
@@ -29,7 +31,7 @@ const history = {
         'fontSize', 'fontFamily', 'fontWeight', 'fontStyle', 'fill', 'stroke',
         'strokeWidth', 'paintFirst', 'textAlign', 'charSpacing', 'lineHeight',
         'text', 'splitByGrapheme', 'breakWords', 'padding', 'originX', 'originY',
-        'rx', 'ry', 'isUserRect', '_originalRx', '_originalRy'
+        'rx', 'ry', 'isUserRect', '_originalRx', '_originalRy', 'shadow'
     ],
 
     // 获取当前图片的历史数据（每个语言+图片索引独立）
@@ -122,7 +124,8 @@ const history = {
                     borderColor: '#a855f7',
                     cornerColor: '#a855f7',
                     cornerSize: 10,
-                    transparentCorners: false
+                    transparentCorners: false,
+                    shadow: objData.shadow ? new fabric.Shadow(objData.shadow) : null
                 });
             } else if (objData.type === 'rect') {
                 fabricObj = new fabric.Rect({
@@ -144,7 +147,8 @@ const history = {
                     borderColor: '#a855f7',
                     cornerColor: '#a855f7',
                     cornerSize: 10,
-                    transparentCorners: false
+                    transparentCorners: false,
+                    shadow: objData.shadow ? new fabric.Shadow(objData.shadow) : null
                 });
 
                 // 绑定矩形缩放监听器
@@ -276,6 +280,16 @@ document.addEventListener('DOMContentLoaded', function () {
     const savedTheme = localStorage.getItem('theme') || 'dark';
     document.documentElement.setAttribute('data-theme', savedTheme);
 
+    // 🔑 绑定历史记录展开事件（始终可见的历史记录）
+    const historyDetails = document.getElementById('quick-history-details');
+    if (historyDetails) {
+        historyDetails.addEventListener('toggle', function () {
+            if (this.open && typeof loadQuickHistory === 'function') {
+                loadQuickHistory();
+            }
+        });
+    }
+
     // 绑定主题切换按钮 (with null check)
     const themeToggleBtn = document.getElementById('themeToggle');
     if (themeToggleBtn) {
@@ -358,6 +372,12 @@ document.addEventListener('DOMContentLoaded', function () {
         fileInput.addEventListener('change', function () {
             console.log('📁 File input change event fired, files:', this.files.length);
             if (this.files.length > 0) {
+                // 更新选择计数提示
+                const countPreview = document.getElementById('file-count-preview');
+                if (countPreview) {
+                    countPreview.textContent = `已选择 ${this.files.length} 张图片`;
+                    countPreview.style.display = 'block';
+                }
                 handleImageUpload(this.files);
             }
         });
@@ -455,6 +475,33 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
     });
+
+    // 🔑 鼠标滚轮调整数字输入框数值
+    document.addEventListener('wheel', function (e) {
+        const activeElement = document.activeElement;
+        if (activeElement && activeElement.tagName === 'INPUT' && activeElement.type === 'number') {
+            // 只有当输入框处于焦点状态时才生效
+            e.preventDefault();
+
+            const step = parseFloat(activeElement.step) || 1;
+            const direction = e.deltaY < 0 ? 1 : -1;
+            let val = parseFloat(activeElement.value) || 0;
+
+            let newVal = val + direction * step;
+
+            // 边界检查
+            if (activeElement.min !== '' && newVal < parseFloat(activeElement.min)) newVal = parseFloat(activeElement.min);
+            if (activeElement.max !== '' && newVal > parseFloat(activeElement.max)) newVal = parseFloat(activeElement.max);
+
+            // 修复浮点数精度问题
+            const precision = (step.toString().split('.')[1] || '').length;
+            activeElement.value = newVal.toFixed(precision);
+
+            // 触发 change 和 input 事件以同步 UI (比如滑块)
+            activeElement.dispatchEvent(new Event('change', { bubbles: true }));
+            activeElement.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+    }, { passive: false });
 
     // 绑定字体大小滑块和数字输入框 (with null checks)
     const fontSizeSlider = document.getElementById('font-size');
@@ -811,6 +858,86 @@ document.addEventListener('DOMContentLoaded', function () {
             applyLineHeight(this.value);
         });
     }
+
+    // 🔑 文字转换逻辑
+    function applyTextTransform(mode) {
+        const transformText = (obj) => {
+            if (obj.type !== 'textbox' && obj.type !== 'i-text') return;
+            let text = obj.text || '';
+            if (mode === 'uppercase') {
+                text = text.toUpperCase();
+            } else if (mode === 'capitalize') {
+                text = text.replace(/\b\w/g, l => l.toUpperCase());
+            } else if (mode === 'none') {
+                // 恢复默认暂时没有好的反向逻辑，通常只是重新获取原始数据，
+                // 但这里我们简单地全小写演示或保持不变
+                text = text.toLowerCase();
+            }
+            obj.set('text', text);
+        };
+
+        if (selectedObjectsArray && selectedObjectsArray.length > 0) {
+            selectedObjectsArray.forEach(transformText);
+        } else if (selectedObject) {
+            transformText(selectedObject);
+        }
+        if (canvas) canvas.renderAll();
+        history.saveState();
+    }
+
+    document.getElementById('text-transform-capitalize')?.addEventListener('click', () => applyTextTransform('capitalize'));
+    document.getElementById('text-transform-uppercase')?.addEventListener('click', () => applyTextTransform('uppercase'));
+    document.getElementById('text-transform-none')?.addEventListener('click', () => applyTextTransform('none'));
+
+    // 🔑 文字阴影逻辑
+    function applyTextShadow() {
+        if (!canvas) return;
+
+        // 使用阴影专用颜色选择器
+        const color = document.getElementById('shadow-color')?.value || '#000000';
+        const offsetX = parseInt(document.getElementById('shadow-offset-x')?.value) || 2;
+        const offsetY = parseInt(document.getElementById('shadow-offset-y')?.value) || 2;
+        const blur = parseInt(document.getElementById('shadow-blur')?.value) || 4;
+
+        const isEnabled = !document.getElementById('toggle-shadow')?.classList.contains('disabled');
+
+        const shadow = isEnabled ? new fabric.Shadow({
+            color: color,
+            blur: blur,
+            offsetX: offsetX,
+            offsetY: offsetY
+        }) : null;
+
+        const applyToObj = (obj) => {
+            if (obj.type === 'textbox' || obj.type === 'i-text') {
+                obj.set('shadow', shadow);
+            }
+        };
+
+        if (selectedObjectsArray && selectedObjectsArray.length > 0) {
+            selectedObjectsArray.forEach(applyToObj);
+        } else if (selectedObject) {
+            applyToObj(selectedObject);
+        }
+
+        canvas.renderAll();
+    }
+
+    // 阴影控件事件绑定（颜色 + XYB）
+    document.getElementById('shadow-color')?.addEventListener('input', applyTextShadow);
+    document.getElementById('shadow-color')?.addEventListener('change', () => history.saveState());
+
+    document.querySelectorAll('#shadow-offset-x, #shadow-offset-y, #shadow-blur').forEach(el => {
+        el.addEventListener('input', applyTextShadow);
+        el.addEventListener('change', () => history.saveState());
+    });
+
+    document.getElementById('toggle-shadow')?.addEventListener('click', function () {
+        this.classList.toggle('disabled');
+        this.textContent = this.classList.contains('disabled') ? '×' : '✓';
+        applyTextShadow();
+        history.saveState();
+    });
 
     // 绑定样式按钮 (with null checks and debug logging)
     const toggleBoldBtn = document.getElementById('toggle-bold');
@@ -1531,6 +1658,35 @@ function updateTextStyleEditor(obj) {
         });
         const alignBtn = document.querySelector(`.align-btn[data-align="${obj.textAlign || 'center'}"]`);
         if (alignBtn) alignBtn.classList.add('active');
+
+        // 更新间距和行高
+        if (document.getElementById('letter-spacing-input')) {
+            document.getElementById('letter-spacing-input').value = obj.charSpacing || 0;
+        }
+        if (document.getElementById('line-height-input')) {
+            document.getElementById('line-height-input').value = (obj.lineHeight || 1.2).toFixed(1);
+        }
+
+        // 更新阴影控件
+        if (obj.shadow) {
+            const s = obj.shadow;
+            document.getElementById('toggle-shadow')?.classList.remove('disabled');
+            const span = document.getElementById('toggle-shadow')?.querySelector('span');
+            if (span) span.innerHTML = '✓';
+
+            if (document.getElementById('shadow-offset-x')) document.getElementById('shadow-offset-x').value = s.offsetX || 0;
+            if (document.getElementById('shadow-offset-y')) document.getElementById('shadow-offset-y').value = s.offsetY || 0;
+            if (document.getElementById('shadow-blur')) document.getElementById('shadow-blur').value = s.blur || 0;
+
+            // 更新数值显示
+            if (document.getElementById('shadow-x-val')) document.getElementById('shadow-x-val').textContent = s.offsetX || 0;
+            if (document.getElementById('shadow-y-val')) document.getElementById('shadow-y-val').textContent = s.offsetY || 0;
+            if (document.getElementById('shadow-blur-val')) document.getElementById('shadow-blur-val').textContent = s.blur || 0;
+        } else {
+            document.getElementById('toggle-shadow')?.classList.add('disabled');
+            const span = document.getElementById('toggle-shadow')?.querySelector('span');
+            if (span) span.innerHTML = '&times;';
+        }
     } else {
         // 不是文本对象，隐藏样式编辑器
         document.getElementById('text-style-editor').style.display = 'none';
@@ -1613,6 +1769,9 @@ async function translateImage() {
     batchProgress.style.display = 'block';
     loadingOverlay.classList.add('active');
 
+    const progressFill = document.getElementById('progressBarFill');
+    const percentDisplay = document.getElementById('loadingPercent');
+
     const totalTasks = queue.length * selectedLangs.length;
     let completed = 0;
 
@@ -1632,6 +1791,11 @@ async function translateImage() {
             renderLangTabs(selectedLangs);
 
             loadingText.textContent = `翻译 ${img.file.name} → ${lang.name} (${completed + 1}/${totalTasks})`;
+
+            // 更新进度条和百分比
+            const percent = Math.round(((completed) / totalTasks) * 100);
+            if (progressFill) progressFill.style.width = percent + '%';
+            if (percentDisplay) percentDisplay.textContent = percent + '%';
 
             try {
                 const formData = new FormData();
@@ -1690,9 +1854,13 @@ async function translateImage() {
             }
 
             completed++;
-            const pct = (completed / totalTasks) * 100;
-            batchBar.style.width = `${pct}%`;
-            batchText.innerText = `${completed}/${totalTasks}`;
+            const pct = Math.round((completed / totalTasks) * 100);
+            if (batchBar) batchBar.style.width = `${pct}%`;
+            if (batchText) batchText.innerText = `${completed}/${totalTasks}`;
+
+            // 更新新UI组件 (局部遮罩中的进度条)
+            if (progressFill) progressFill.style.width = pct + '%';
+            if (percentDisplay) percentDisplay.textContent = pct + '%';
         }
 
         // 这张图所有语言处理完，标记为done
@@ -1712,6 +1880,25 @@ async function translateImage() {
     // 🔑 渲染下载按钮
     renderDownloadButtons();
     renderMultiLangThumbnails();
+
+    // 🔑 显示快捷同步区域
+    if (typeof showQuickSyncSection === 'function') {
+        showQuickSyncSection();
+    }
+
+    // 🔑 自动保存翻译结果到历史记录
+    autoSaveTranslationHistory(queue, selectedLangs);
+}
+
+// 🔑 自动保存翻译历史（新翻译完成后调用）
+async function autoSaveTranslationHistory(images, langs) {
+    console.log('📦 自动保存翻译历史...');
+
+    // 新翻译时，清除历史编辑标记，创建新记录
+    appState.currentHistoryName = null;
+
+    // 调用统一的保存函数
+    await saveCurrentToHistory();
 }
 
 // 🔑 渲染语言标签栏
@@ -2077,10 +2264,10 @@ function renderMultiLangThumbnails() {
                     console.log('🔒 同步锁激活，跳过保存当前画布状态');
                 }
                 appState.currentIndex = index;
-                // 🔑 切换图片时清空撤销历史
-                if (history && typeof history.clear === 'function') {
-                    history.clear();
-                }
+                // 🔑 修复：切换图片时不应清空历史，每张图片有独立的撤销栈
+                // if (history && typeof history.clear === 'function') {
+                //     history.clear();
+                // }
                 loadMultiLangImageToCanvas(langCode, index);
                 renderMultiLangThumbnails();
             };
@@ -3037,9 +3224,16 @@ function handleImageUpload(files) {
 
     // 🔑 隐藏空状态占位符
     const originalEmpty = document.getElementById('original-empty');
-    const resultEmpty = document.getElementById('result-empty');
     if (originalEmpty && addedCount > 0) originalEmpty.style.display = 'none';
-    // 结果区域的占位符在翻译完成后隐藏（在loadProcessedImageToCanvas中）
+
+    // 🔑 成功上传反馈：给上传区域添加一个短暂的成功状态
+    if (addedCount > 0) {
+        const uz = document.getElementById('uploadZone');
+        if (uz) {
+            uz.classList.add('upload-success');
+            setTimeout(() => uz.classList.remove('upload-success'), 2000);
+        }
+    }
 
     // 如果当前没有选中的图片，自动选中第一张新添加的
     if (appState.currentIndex === -1 && appState.images.length > 0) {
@@ -3123,7 +3317,13 @@ async function switchImage(index) {
 // 渲染缩略图栏
 function renderThumbnails() {
     const container = document.getElementById('thumbnailArea');
+    if (!container) return;
     container.innerHTML = ''; // 清空
+
+    if (appState.images.length === 0) {
+        container.innerHTML = '<div class="thumbnail-placeholder">上传图片后，缩略图将显示在这里</div>';
+        return;
+    }
 
     appState.images.forEach((img, index) => {
         const div = document.createElement('div');
@@ -3132,97 +3332,54 @@ function renderThumbnails() {
         let className = 'thumbnail';
         if (index === appState.currentIndex) className += ' active';
         if (img.status === 'processing' || img.status === 'pending') {
-            className += ' processing'; // 灰色+转圈+禁用点击
+            className += ' processing';
+        }
+        if (img.status === 'done') {
+            className += ' done';
         }
         div.className = className;
 
-        div.style.position = 'relative';
-
-        // 🔑 只有done状态才能点击
+        // 只有done状态才能点击切换
         if (img.status === 'done') {
             div.onclick = () => switchImage(index);
-            div.style.cursor = 'pointer';
         } else {
-            div.onclick = null;
             div.style.cursor = 'not-allowed';
         }
 
-        div.title = img.file.name + (img.status === 'processing' ? ' (处理中...)' : img.status === 'pending' ? ' (等待处理)' : '');
+        // 索引角标
+        const indexBadge = document.createElement('div');
+        indexBadge.className = 'thumbnail-index';
+        indexBadge.textContent = index + 1;
+        div.appendChild(indexBadge);
 
         const image = document.createElement('img');
         image.src = img.url;
-        image.style.width = '100%';
-        image.style.height = '100%';
-        image.style.objectFit = 'cover';
-        image.style.borderRadius = '10px';
-
         div.appendChild(image);
 
-        // 添加删除按钮 (X icon)
+        // 删除按钮
         const deleteBtn = document.createElement('div');
-        deleteBtn.innerHTML = '×';
-        deleteBtn.style.position = 'absolute';
-        deleteBtn.style.top = '4px';
-        deleteBtn.style.right = '4px';
-        deleteBtn.style.width = '20px';
-        deleteBtn.style.height = '20px';
-        deleteBtn.style.borderRadius = '50%';
-        deleteBtn.style.background = 'rgba(239, 68, 68, 0.9)'; // 红色背景
-        deleteBtn.style.color = 'white';
-        deleteBtn.style.display = 'flex';
-        deleteBtn.style.alignItems = 'center';
-        deleteBtn.style.justifyContent = 'center';
-        deleteBtn.style.fontSize = '16px';
-        deleteBtn.style.fontWeight = 'bold';
-        deleteBtn.style.cursor = 'pointer';
-        deleteBtn.style.opacity = '0';
-        deleteBtn.style.transition = 'opacity 0.2s';
-        deleteBtn.style.zIndex = '10';
+        deleteBtn.className = 'thumbnail-delete';
+        deleteBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
         deleteBtn.title = '删除此图片';
-
-        // 悬停时显示删除按钮
-        div.addEventListener('mouseenter', () => {
-            deleteBtn.style.opacity = '1';
-        });
-        div.addEventListener('mouseleave', () => {
-            deleteBtn.style.opacity = '0';
-        });
-
-        // 删除按钮点击事件
         deleteBtn.onclick = (e) => {
-            e.stopPropagation(); // 阻止触发缩略图点击
+            e.stopPropagation();
             deleteImage(index);
         };
-
         div.appendChild(deleteBtn);
 
-        // 状态角标
-        const badge = document.createElement('div');
-        badge.style.position = 'absolute';
-        badge.style.right = '4px';
-        badge.style.bottom = '4px';
-        badge.style.width = '10px';
-        badge.style.height = '10px';
-        badge.style.borderRadius = '50%';
-        badge.style.border = '2px solid white';
-
+        // 成功勾选
         if (img.status === 'done') {
-            badge.style.background = '#10b981'; // Green
-            div.appendChild(badge);
-        } else if (img.status === 'processing') {
-            badge.style.background = '#f59e0b'; // Orange
-            // 添加旋转动画
-            badge.style.borderRadius = '0';
-            badge.style.width = '12px';
-            badge.style.height = '12px';
-            badge.style.border = '2px solid #f59e0b';
-            badge.style.borderTopColor = 'transparent';
-            badge.style.borderRadius = '50%';
-            badge.style.animation = 'spin 1s linear infinite';
-            div.appendChild(badge);
-        } else if (img.status === 'error') {
-            badge.style.background = '#ef4444'; // Red
-            div.appendChild(badge);
+            const check = document.createElement('div');
+            check.className = 'thumbnail-success-check';
+            check.innerHTML = '✓';
+            div.appendChild(check);
+        }
+
+        // 处理中指示器
+        if (img.status === 'processing' || img.status === 'pending') {
+            const loader = document.createElement('div');
+            loader.className = 'thumbnail-loading-spinner';
+            div.appendChild(loader);
         }
 
         container.appendChild(div);
@@ -4128,16 +4285,33 @@ function renderDownloadButtons() {
 
         if (doneCount === 0) return;
 
+        // 🔑 创建行容器
+        const row = document.createElement('div');
+        row.style.cssText = 'display: flex; align-items: center; gap: 8px;';
+
+        // 语言下载按钮
         const btn = document.createElement('button');
         btn.className = 'action-btn secondary';
-        btn.style.cssText = 'padding: 8px 12px; font-size: 12px;';
+        btn.id = `download-lang-${langCode}`;
+        btn.style.cssText = 'padding: 8px 12px; font-size: 12px; flex: 1;';
         btn.innerHTML = `📦 ${langData.name} (${doneCount}张)`;
         btn.onclick = (e) => downloadByLang(langCode, e.currentTarget);
-        if (btnsDiv) btnsDiv.appendChild(btn);
+        row.appendChild(btn);
+
+        // 🔑 打包开关复选框
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.id = `zip-toggle-${langCode}`;
+        checkbox.checked = true; // 默认打包
+        checkbox.style.cssText = 'width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent);';
+        checkbox.title = '打勾=打包ZIP，不勾=单张下载';
+        row.appendChild(checkbox);
+
+        if (btnsDiv) btnsDiv.appendChild(row);
     });
 }
 
-// 🔑 按语言下载 - 使用离屏渲染确保每张图正确
+// 🔑 按语言下载 - 根据开关决定打包还是单张
 async function downloadByLang(langCode, btnElement) {
     const langData = appState.translations[langCode];
     if (!langData) {
@@ -4151,41 +4325,69 @@ async function downloadByLang(langCode, btnElement) {
         return;
     }
 
+    // 🔑 检查打包开关
+    const zipToggle = document.getElementById(`zip-toggle-${langCode}`);
+    const useZip = zipToggle ? zipToggle.checked : true;
+
     const btn = btnElement;
     const originalText = btn.innerHTML;
-    btn.innerHTML = '打包中...';
+    btn.innerHTML = useZip ? '打包中...' : '导出中...';
     btn.disabled = true;
 
     try {
-        const zip = new JSZip();
-        // 🔑 不再创建文件夹，直接放图片
-        // const folder = zip.folder(`${langData.name}_translated`);
+        if (useZip) {
+            // === 打包ZIP模式 ===
+            const zip = new JSZip();
 
-        for (let i = 0; i < doneImages.length; i++) {
-            const imgObj = doneImages[i];
-            btn.innerHTML = `导出中 ${i + 1}/${doneImages.length}`;
+            for (let i = 0; i < doneImages.length; i++) {
+                const imgObj = doneImages[i];
+                btn.innerHTML = `导出中 ${i + 1}/${doneImages.length}`;
 
-            try {
-                // 🔑 使用离屏canvas导出，避免主canvas干扰
-                const dataURL = await exportImageOffscreen(imgObj);
-                if (dataURL) {
-                    const base64Data = dataURL.replace(/^data:image\/(png|jpg);base64,/, "");
-                    const fileName = imgObj.originalImg ? imgObj.originalImg.file.name : `image_${i}.png`;
-                    // 🔑 直接在根目录添加文件，不再创建子文件夹 (用户需求)
-                    zip.file(fileName, base64Data, { base64: true });
+                try {
+                    const dataURL = await exportImageOffscreen(imgObj);
+                    if (dataURL) {
+                        const base64Data = dataURL.replace(/^data:image\/(png|jpg);base64,/, "");
+                        const fileName = imgObj.originalImg ? imgObj.originalImg.file.name : `image_${i}.png`;
+                        zip.file(fileName, base64Data, { base64: true });
+                    }
+                } catch (e) {
+                    console.error(`导出失败: ${imgObj.originalImg?.file?.name}`, e);
                 }
-            } catch (e) {
-                console.error(`导出失败: ${imgObj.originalImg?.file?.name}`, e);
+            }
+
+            const content = await zip.generateAsync({ type: "blob" });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(content);
+            link.download = `${langData.name}_${doneImages.length}张.zip`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+        } else {
+            // === 单张下载模式 ===
+            for (let i = 0; i < doneImages.length; i++) {
+                const imgObj = doneImages[i];
+                btn.innerHTML = `下载 ${i + 1}/${doneImages.length}`;
+
+                try {
+                    const dataURL = await exportImageOffscreen(imgObj);
+                    if (dataURL) {
+                        const fileName = imgObj.originalImg ? imgObj.originalImg.file.name : `image_${i}.png`;
+                        const link = document.createElement('a');
+                        link.href = dataURL;
+                        link.download = fileName;
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+
+                        // 稍作延迟避免浏览器拦截
+                        await new Promise(r => setTimeout(r, 300));
+                    }
+                } catch (e) {
+                    console.error(`下载失败: ${imgObj.originalImg?.file?.name}`, e);
+                }
             }
         }
-
-        const content = await zip.generateAsync({ type: "blob" });
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(content);
-        link.download = `${langData.name}_${doneImages.length}张.zip`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
 
     } catch (e) {
         alert("下载失败: " + e.message);
@@ -4658,39 +4860,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // 保存图片逻辑
-    const saveBtn = document.getElementById('save-image');
-    if (saveBtn) {
-        saveBtn.addEventListener('click', function () {
-            if (!canvas) return;
-
-            // 取消所有选中，确保保存时不显示选中框
-            canvas.discardActiveObject();
-            canvas.renderAll();
-
-            try {
-                // 使用 multiplier: 1 导出原始尺寸
-                // 因为我们缩放使用的是CSS style，Fabric内部画布保持原分辨率
-                const dataURL = canvas.toDataURL({
-                    format: 'png',
-                    quality: 1,
-                    multiplier: 1
-                });
-
-                const link = document.createElement('a');
-                link.download = currentFilename; // 使用原始文件名
-                link.href = dataURL;
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-            } catch (e) {
-                console.error("保存图片失败", e);
-                alert("保存图片失败: " + e.message);
-            }
-        });
-    }
-    // 注意：文件上传事件已在上方 DOMContentLoaded 中绑定 (lines 125-164)
-    // 此处不再重复绑定，避免双倍上传问题
+    // 🔑 注意：save-image 按钮的 onclick 已在 HTML 中绑定 downloadImage()
+    // 此处不再重复绑定事件，避免双倍下载问题
 
     // 🔑 渲染模式切换 - 实时应用 sharpness 设置 (全局生效)
     const renderModeSelect = document.getElementById('text-render-mode');
@@ -4972,9 +5143,9 @@ async function syncSingleLang(langCode, btnElement) {
     }
 }
 
-// 一键同步全部语言 (缓存优先架构：快速！)
+// 一键同步全部语言 (直接同步，不创建历史记录)
 async function syncAllToFolders() {
-    const syncAllBtn = document.getElementById('sync-all-btn');
+    const syncAllBtn = document.getElementById('sync-all-btn') || document.getElementById('quick-sync-all-btn');
     if (!syncAllBtn) return;
 
     // 收集所有有效路径的语言
@@ -4995,18 +5166,20 @@ async function syncAllToFolders() {
 
     // 更新按钮状态
     const originalText = syncAllBtn.innerHTML;
-    syncAllBtn.innerHTML = '🚀 准备导出...';
+    syncAllBtn.innerHTML = '🚀 同步中...';
     syncAllBtn.disabled = true;
     syncAllBtn.classList.add('syncing');
 
+    let totalSuccess = 0;
+    let totalFail = 0;
+
     try {
-        console.log('🚀 开始缓存优先同步流程...');
-        showSyncStatus('正在收集所有翻译图片...');
+        console.log('🚀 开始直接同步到文件夹...');
+        showSyncStatus('正在同步翻译图片到目标文件夹...');
 
-        // === 第一步：收集所有图片数据 ===
-        const allImages = [];
-
+        // 直接同步每种语言的图片
         for (const langCode of Object.keys(langPaths)) {
+            const targetPath = langPaths[langCode];
             const langData = appState.translations[langCode];
             if (!langData || !langData.images) continue;
 
@@ -5017,72 +5190,42 @@ async function syncAllToFolders() {
                 const fileMeta = imgObj.originalImg ? imgObj.originalImg.file : imgObj.file;
                 const filename = fileMeta ? fileMeta.name : `image_${i + 1}.png`;
 
-                syncAllBtn.innerHTML = `📤 导出 ${langCode} (${i + 1}/${doneImages.length})`;
-                showSyncStatus(`正在导出 [${LANG_NAMES[langCode] || langCode}]: ${filename}`);
+                syncAllBtn.innerHTML = `📤 ${langCode} (${i + 1}/${doneImages.length})`;
+                showSyncStatus(`同步 [${LANG_NAMES[langCode] || langCode}]: ${filename}`);
 
-                const imageData = await exportImageForSync(imgObj);
-                if (imageData) {
-                    allImages.push({
-                        langCode: langCode,
-                        filename: filename,
-                        imageData: imageData
-                    });
+                try {
+                    const imageData = await exportImageForSync(imgObj);
+                    if (imageData) {
+                        const response = await fetch('/api/sync-to-folder', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                target_path: targetPath,
+                                filename: filename,
+                                image_data: imageData
+                            })
+                        });
+
+                        const result = await response.json();
+                        if (result.success) {
+                            totalSuccess++;
+                        } else {
+                            totalFail++;
+                            console.error(`同步失败 ${filename}:`, result.error);
+                        }
+                    }
+                } catch (e) {
+                    totalFail++;
+                    console.error(`同步出错 ${filename}:`, e);
                 }
-                await new Promise(r => setTimeout(r, 20)); // 小延迟保持UI响应
+
+                await new Promise(r => setTimeout(r, 20));
             }
-        }
-
-        if (allImages.length === 0) {
-            throw new Error('没有可导出的图片');
-        }
-
-        // === 第二步：批量导出到缓存 ===
-        syncAllBtn.innerHTML = '📦 保存到缓存...';
-        showSyncStatus(`正在保存 ${allImages.length} 张图片到缓存...`);
-
-        const cacheResponse = await fetch('/api/export-to-cache', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ images: allImages })
-        });
-
-        const cacheResult = await cacheResponse.json();
-        if (!cacheResult.success) {
-            throw new Error('导出到缓存失败: ' + (cacheResult.error || '未知错误'));
-        }
-
-        console.log('✅ 导出到缓存完成:', cacheResult.cachePath, cacheResult.counts);
-
-        // === 第三步：从缓存替换到目标文件夹 ===
-        syncAllBtn.innerHTML = '🔄 替换文件中...';
-        showSyncStatus('正在将缓存中的文件替换到目标文件夹...');
-
-        const syncResponse = await fetch('/api/sync-from-cache', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                cachePath: cacheResult.cachePath,
-                langPaths: langPaths
-            })
-        });
-
-        const syncResult = await syncResponse.json();
-        if (!syncResult.success) {
-            throw new Error('从缓存同步失败: ' + (syncResult.error || '未知错误'));
-        }
-
-        // 统计结果
-        let totalSuccess = 0;
-        let totalFail = 0;
-        for (const langCode in syncResult.results) {
-            const r = syncResult.results[langCode];
-            totalSuccess += r.success || 0;
-            totalFail += r.fail || 0;
         }
 
         const msg = `✅ 同步完成！成功 ${totalSuccess} 张，失败 ${totalFail} 张`;
         showSyncStatus(msg, totalFail > 0);
-        alert(msg + '\n\n缓存已保存为历史记录，可在"历史记录"中查看');
+        alert(msg);
 
         syncAllBtn.innerHTML = '✓ 完成';
         syncAllBtn.classList.add('success');
@@ -5665,4 +5808,416 @@ function setupRectSelectionListener() {
     });
 
     console.log('✅ 矩形选择监听器已设置');
+}
+
+// ========== 快捷同步功能 (右侧面板) ==========
+
+// 显示快捷同步按钮（翻译完成后调用）
+function showQuickSyncSection() {
+    const section = document.getElementById('quick-sync-section');
+    if (section) {
+        section.style.display = 'block';
+    }
+}
+
+// 快捷一键同步 (复用 syncAllToFolders)
+async function quickSyncAll() {
+    const quickBtn = document.getElementById('quick-sync-all-btn');
+    if (!quickBtn) return;
+
+    // 检查是否有配置路径
+    const translatedLangs = appState.translations ? Object.keys(appState.translations) : [];
+    let hasAnyPath = false;
+    for (const langCode of translatedLangs) {
+        if (syncPaths[langCode] && syncPaths[langCode].trim()) {
+            hasAnyPath = true;
+            break;
+        }
+    }
+
+    if (!hasAnyPath) {
+        // 没有配置路径，打开同步设置弹窗
+        const modal = document.getElementById('syncModal');
+        if (modal) {
+            modal.classList.add('active');
+            renderSyncPathInputs();
+        }
+        alert('请先配置同步路径！');
+        return;
+    }
+
+    // 有路径，直接调用同步
+    await syncAllToFolders();
+
+    // 刷新快捷历史
+    loadQuickHistory();
+}
+
+// 加载快捷历史记录
+async function loadQuickHistory() {
+    const listContainer = document.getElementById('quick-history-list');
+    if (!listContainer) return;
+
+    listContainer.innerHTML = '<div style="font-size: 11px; color: var(--text-muted); text-align: center;">加载中...</div>';
+
+    try {
+        const response = await fetch('/api/list-sync-history');
+        const result = await response.json();
+
+        if (!result.success || !result.history || result.history.length === 0) {
+            listContainer.innerHTML = '<div style="font-size: 11px; color: var(--text-muted); text-align: center;">暂无历史记录</div>';
+            return;
+        }
+
+        listContainer.innerHTML = '';
+
+        // 只显示最近5条
+        const recentHistory = result.history.slice(0, 5);
+
+        for (const item of recentHistory) {
+            const langCount = Object.keys(item.langs || {}).length;
+            const totalImages = Object.values(item.langs || {}).reduce((a, b) => a + b, 0);
+
+            const div = document.createElement('div');
+            div.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 11px;';
+            div.innerHTML = `
+                <div style="flex: 1; min-width: 0;">
+                    <div style="color: var(--text-secondary);">${item.name}</div>
+                    <div style="color: var(--text-muted); font-size: 10px;">${langCount}种语言, ${totalImages}张图</div>
+                </div>
+                <div style="display: flex; gap: 3px; flex-shrink: 0;">
+                    <button class="style-btn" title="打开文件夹" style="padding: 2px 6px; font-size: 10px;" onclick="openSyncFolder('${item.path.replace(/\\/g, '\\\\')}')">📁</button>
+                    <button class="style-btn danger" title="删除" style="padding: 2px 6px; font-size: 10px;" onclick="deleteSyncHistory('${item.name}'); loadQuickHistory();">🗑️</button>
+                </div>
+            `;
+            listContainer.appendChild(div);
+        }
+    } catch (e) {
+        console.error('加载快捷历史失败:', e);
+        listContainer.innerHTML = '<div style="font-size: 11px; color: var(--text-muted); text-align: center;">加载失败</div>';
+    }
+}
+
+// 一键清除所有历史记录
+async function clearAllSyncHistory() {
+    if (!confirm('确定要删除所有同步历史记录吗？此操作不可恢复！')) return;
+
+    try {
+        const response = await fetch('/api/list-sync-history');
+        const result = await response.json();
+
+        if (!result.success || !result.history) {
+            alert('没有历史记录可删除');
+            return;
+        }
+
+        let deleted = 0;
+        for (const item of result.history) {
+            try {
+                await fetch('/api/delete-sync-history', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: item.name })
+                });
+                deleted++;
+            } catch (e) {
+                console.error('删除失败:', item.name, e);
+            }
+        }
+
+        alert(`已清除 ${deleted} 条历史记录！`);
+        loadQuickHistory();
+        loadSyncHistory(); // 同时刷新弹窗里的历史
+
+    } catch (e) {
+        console.error('清除历史失败:', e);
+        alert('清除失败: ' + e.message);
+    }
+}
+
+// 🔑 从历史记录恢复到画布
+async function restoreFromHistory(historyName) {
+    if (!confirm(`确定要恢复历史记录 "${historyName}" 吗？\n\n当前画布内容将被替换。`)) {
+        return;
+    }
+
+    console.log('📂 正在恢复历史记录:', historyName);
+
+    try {
+        const response = await fetch('/api/get-history-images', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: historyName })
+        });
+
+        const result = await response.json();
+
+        if (!result.success) {
+            alert('恢复失败: ' + (result.error || '未知错误'));
+            return;
+        }
+
+        const historyImages = result.images; // {langCode: [{filename, imageData}, ...]}
+
+        if (!historyImages || Object.keys(historyImages).length === 0) {
+            alert('该历史记录中没有图片');
+            return;
+        }
+
+        // 清空当前状态
+        appState.images = [];
+        appState.currentIndex = -1;
+        appState.translations = {};
+
+        // 🔑 记录当前正在编辑的历史记录名称
+        appState.currentHistoryName = historyName;
+
+        // 获取所有语言
+        const langCodes = Object.keys(historyImages);
+        const firstLang = langCodes[0];
+        const firstLangImages = historyImages[firstLang];
+
+        // 初始化翻译状态
+        for (const langCode of langCodes) {
+            const langName = LANG_NAMES[langCode] || langCode;
+            appState.translations[langCode] = {
+                name: langName,
+                status: 'done',
+                images: []
+            };
+        }
+
+        // 对于每张图片，创建图片对象
+        for (let i = 0; i < firstLangImages.length; i++) {
+            const img = firstLangImages[i];
+
+            // 创建原始图片对象（用filename作为标识）
+            const imgObj = {
+                id: Date.now() + i,
+                file: { name: img.filename },
+                url: img.imageData, // 使用历史图片作为预览
+                status: 'done',
+                result: { success: true }
+            };
+
+            appState.images.push(imgObj);
+
+            // 为每种语言创建翻译图片记录
+            for (const langCode of langCodes) {
+                const langImages = historyImages[langCode];
+                const langImg = langImages.find(li => li.filename === img.filename) || langImages[i];
+
+                if (langImg) {
+                    const translationItem = {
+                        originalImg: imgObj,
+                        file: { name: img.filename },
+                        status: 'done',
+                        result: {
+                            success: true,
+                            restored_url: langImg.imageData
+                        }
+                    };
+
+                    appState.translations[langCode].images.push(translationItem);
+                }
+            }
+        }
+
+        // 更新UI
+        appState.currentIndex = 0;
+        appState.selectedLang = firstLang;
+
+        renderThumbnails();
+        renderLangTabs(langCodes.map(code => ({ code, name: LANG_NAMES[code] || code })));
+        renderDownloadButtons();
+        showQuickSyncSection();
+
+        // 🔑 加载第一张图片到画布
+        if (appState.translations[firstLang] && appState.translations[firstLang].images[0]) {
+            const firstImgObj = appState.translations[firstLang].images[0];
+            loadRestoredImageToCanvas(firstImgObj.result.restored_url);
+        }
+
+        // 刷新历史列表
+        loadQuickHistory();
+
+        alert(`✅ 已恢复历史记录 "${historyName}"\n共 ${langCodes.length} 种语言, ${firstLangImages.length} 张图片`);
+
+    } catch (e) {
+        console.error('恢复历史记录失败:', e);
+        alert('恢复失败: ' + e.message);
+    }
+}
+
+// 🔑 将恢复的图片加载到画布（仅图片，无编辑状态）
+function loadRestoredImageToCanvas(imageDataUrl) {
+    if (!canvas || !imageDataUrl) return;
+
+    canvas.clear();
+
+    fabric.Image.fromURL(imageDataUrl, function (img) {
+        if (!img) {
+            console.error('加载恢复的图片失败');
+            return;
+        }
+
+        const canvasWidth = canvas.getWidth();
+        const canvasHeight = canvas.getHeight();
+
+        // 计算缩放
+        const scaleX = canvasWidth / img.width;
+        const scaleY = canvasHeight / img.height;
+        const scale = Math.min(scaleX, scaleY, 1);
+
+        img.set({
+            left: (canvasWidth - img.width * scale) / 2,
+            top: (canvasHeight - img.height * scale) / 2,
+            scaleX: scale,
+            scaleY: scale,
+            selectable: false,
+            evented: false
+        });
+
+        canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas));
+        console.log('✅ 恢复的图片已加载到画布');
+    }, { crossOrigin: 'anonymous' });
+}
+
+// 🔑 加载完整的canvas状态（包括文字对象、样式等）
+function loadRestoredCanvasState(canvasData, fallbackImageUrl) {
+    if (!canvas) return;
+
+    canvas.clear();
+
+    try {
+        console.log('📋 开始恢复canvas状态...');
+
+        // 🔑 先加载背景图片（使用保存的历史图片，而不是可能失效的临时URL）
+        fabric.Image.fromURL(fallbackImageUrl, function (bgImg) {
+            if (bgImg) {
+                const canvasWidth = canvas.getWidth();
+                const canvasHeight = canvas.getHeight();
+                const scaleX = canvasWidth / bgImg.width;
+                const scaleY = canvasHeight / bgImg.height;
+                const scale = Math.min(scaleX, scaleY, 1);
+
+                bgImg.set({
+                    left: 0,
+                    top: 0,
+                    scaleX: scale,
+                    scaleY: scale,
+                    selectable: false,
+                    evented: false
+                });
+
+                canvas.setBackgroundImage(bgImg, function () {
+                    // 背景图片加载完成后，加载文字对象
+                    if (canvasData && canvasData.objects && canvasData.objects.length > 0) {
+                        fabric.util.enlivenObjects(canvasData.objects, function (objects) {
+                            objects.forEach(function (obj) {
+                                canvas.add(obj);
+                            });
+                            canvas.renderAll();
+                            console.log(`✅ 已恢复 ${objects.length} 个编辑对象`);
+                        });
+                    } else {
+                        canvas.renderAll();
+                        console.log('✅ 背景图片已加载（无编辑对象）');
+                    }
+                });
+            } else {
+                console.error('加载背景图片失败');
+                // 尝试直接加载canvasData
+                canvas.loadFromJSON(canvasData, function () {
+                    canvas.renderAll();
+                    console.log('✅ 已恢复完整的canvas编辑状态（直接加载）');
+                });
+            }
+        }, { crossOrigin: 'anonymous' });
+
+    } catch (e) {
+        console.error('加载canvas状态失败，回退到图片模式:', e);
+        if (fallbackImageUrl) {
+            loadRestoredImageToCanvas(fallbackImageUrl);
+        }
+    }
+}
+
+// 🔑 修改自动保存函数，支持覆盖现有历史记录，保存canvas状态
+async function saveCurrentToHistory() {
+    if (!appState.translations || Object.keys(appState.translations).length === 0) {
+        console.log('没有翻译内容可保存');
+        return;
+    }
+
+    const allImages = [];
+    const langCodes = Object.keys(appState.translations);
+
+    for (const langCode of langCodes) {
+        const langData = appState.translations[langCode];
+        if (!langData || !langData.images) continue;
+
+        const doneImages = langData.images.filter(img => img.status === 'done');
+
+        for (let i = 0; i < doneImages.length; i++) {
+            const imgObj = doneImages[i];
+            const fileMeta = imgObj.originalImg ? imgObj.originalImg.file : imgObj.file;
+            const filename = fileMeta ? fileMeta.name : `image_${i + 1}.png`;
+
+            try {
+                const imageData = await exportImageOffscreen(imgObj);
+                if (imageData) {
+                    allImages.push({
+                        langCode: langCode,
+                        filename: filename,
+                        imageData: imageData
+                    });
+                }
+            } catch (e) {
+                console.warn('导出图片失败:', filename, e);
+            }
+        }
+    }
+
+    if (allImages.length === 0) {
+        console.log('没有图片需要保存');
+        return;
+    }
+
+    // 🔑 如果正在编辑历史记录，覆盖它
+    if (appState.currentHistoryName) {
+        console.log('📝 覆盖现有历史记录:', appState.currentHistoryName);
+
+        const response = await fetch('/api/update-history', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                name: appState.currentHistoryName,
+                images: allImages
+            })
+        });
+
+        const result = await response.json();
+        if (result.success) {
+            console.log('✅ 历史记录已更新:', appState.currentHistoryName);
+        } else {
+            console.warn('更新历史记录失败:', result.error);
+        }
+    } else {
+        // 新建历史记录
+        const response = await fetch('/api/export-to-cache', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ images: allImages })
+        });
+
+        const result = await response.json();
+        if (result.success) {
+            console.log('✅ 新历史记录已创建:', result.cachePath);
+        } else {
+            console.warn('创建历史记录失败:', result.error);
+        }
+    }
+
+    loadQuickHistory();
 }

@@ -9,12 +9,14 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
     <!-- Google Fonts: Varela Round (Rounded/Cute) -->
     <link href="https://fonts.googleapis.com/css2?family=Varela+Round&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/main.css?v=27-UndoRedo">
+    <link rel="stylesheet" href="/static/css/main.css?v=31-SimplifiedSync">
     <!-- 引入JSZip用于批量打包下载 -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
 
-<body>
+<body class="theme-purple-glow">
+    <!-- 移动端抽屉遮罩 -->
+    <div class="drawer-overlay" id="drawer-overlay"></div>
     <!-- 顶部导航栏 -->
     <header class="top-header">
         <div class="header-left">
@@ -112,7 +114,7 @@
                                 <label class="upload-zone compact-zone" for="multi-image-upload" id="uploadZone">
                                     <div class="upload-content">
                                         <div class="upload-icon-large compact-icon">
-                                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"
                                                 viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                                                 <polyline points="17 8 12 3 7 8"></polyline>
@@ -120,6 +122,9 @@
                                             </svg>
                                         </div>
                                         <p class="upload-text compact-text">点击 / 拖拽上传</p>
+                                        <p id="file-count-preview"
+                                            style="font-size: 11px; color: var(--accent); margin-top: 4px; display: none;">
+                                        </p>
                                     </div>
                                 </label>
                             </div>
@@ -275,12 +280,12 @@
                 </div>
                 <!-- 🔑 添加矩形和文本按钮 -->
                 <button id="add-rect-btn" class="view-tab"
-                    style="margin-left: auto; background: rgba(34, 197, 94, 0.25); border-color: rgba(34, 197, 94, 0.6); color: #bbf7d0;">
-                    <span style="font-weight: bold; margin-right: 4px;">+</span>□ 矩形
+                    style="margin-left: auto; background: linear-gradient(135deg, rgba(59,130,246,0.3), rgba(147,51,234,0.3)); border: 1px solid rgba(147,51,234,0.5); color: #c4b5fd;">
+                    <span style="font-size: 12px;">◻️</span> 矩形
                 </button>
                 <button id="add-text-btn-top" class="view-tab"
-                    style="background: rgba(168, 85, 247, 0.25); border-color: rgba(168, 85, 247, 0.6); color: #e9d5ff;">
-                    <span style="font-weight: bold; margin-right: 4px;">+</span> 新增文本
+                    style="background: linear-gradient(135deg, rgba(236,72,153,0.3), rgba(168,85,247,0.3)); border: 1px solid rgba(168,85,247,0.5); color: #f0abfc;">
+                    <span style="font-size: 12px;">✏️</span> 文本
                 </button>
             </div>
 
@@ -309,6 +314,17 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- 🔑 居中加载遮罩 (移动到两个面板之间) -->
+                <div class="loading-overlay" id="loadingOverlay">
+                    <div class="loading-content">
+                        <div class="loading-percent" id="loadingPercent">0%</div>
+                        <div class="loading-text" id="loadingText">正在处理图片...</div>
+                        <div class="progress-container">
+                            <div class="progress-bar-fill" id="progressBarFill"></div>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- 语言版本标签栏 -->
@@ -324,277 +340,316 @@
             </div>
         </section>
 
-        <!-- 右侧面板 - 编辑器 (强制滚动) -->
-        <aside class="aside-panel right-side"
-            style="overflow-y: scroll !important; overflow-x: hidden; max-height: calc(100vh - 70px);">
-            <!-- 工具面板已移除，内容已分散到更合理的位置 -->
+        <!-- 右侧面板 - 编辑器 -->
+        <aside class="aside-panel right-side">
+            <div class="right-side-scroll-wrapper">
+                <!-- 文字样式编辑器 -->
+                <div class="panel-card" id="text-style-editor" style="display: none;">
+                    <div class="card-header">
+                        <span class="style-header">文字编辑 ✏️</span>
+                    </div>
+                    <div class="card-body" style="padding: 12px;">
+                        <!-- 字体 + 渲染模式 -->
+                        <div class="edit-group">
+                            <div style="display: flex; gap: 8px;">
+                                <div style="flex: 2;">
+                                    <label>字体</label>
+                                    <select id="font-family" class="font-select" style="height: 32px; font-size: 12px;">
+                                        <option value="Arial, sans-serif">Arial</option>
+                                        <option value="'Microsoft YaHei', sans-serif">微软雅黑</option>
+                                        <option value="SimHei, sans-serif">黑体</option>
+                                        <option value="SimSun, serif">宋体</option>
+                                        <option value="KaiTi, serif">楷体</option>
+                                        <option value="'Noto Sans SC', sans-serif">Noto Sans SC</option>
+                                        <option value="'PingFang SC', sans-serif">苹方</option>
+                                        <option value="Georgia, serif">Georgia</option>
+                                        <option value="'Times New Roman', serif">Times New Roman</option>
+                                    </select>
+                                </div>
+                                <div style="flex: 1;">
+                                    <label>渲染</label>
+                                    <select id="text-render-mode" class="font-select"
+                                        style="height: 32px; font-size: 11px;">
+                                        <option value="default">默认</option>
+                                        <option value="sharp" selected>锐利</option>
+                                        <option value="strong">浑厚</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
 
-            <!-- 文字样式编辑器 (现在处于最顶部) -->
-            <div class="panel-card" id="text-style-editor" style="display: none; flex-shrink: 0;">
-                <div class="card-header">
-                    <span class="style-header">文字编辑 ✏️</span>
-                </div>
-                <div class="card-body" style="padding: 10px;">
-                    <!-- 字体 + 渲染模式 (合并一行) -->
-                    <div class="edit-group">
+                        <!-- 字号 -->
+                        <div class="edit-group">
+                            <label>字号</label>
+                            <div class="slider-row">
+                                <input type="range" id="font-size" min="8" max="120" value="20">
+                                <input type="number" id="font-size-input" class="size-input" value="20" min="8"
+                                    max="200" style="width: 50px; height: 32px;">
+                                <span class="size-unit">px</span>
+                            </div>
+                            <div style="display: flex; gap: 6px; margin-top: 8px;">
+                                <button class="style-btn size-shortcut-btn" data-size="24" style="flex: 1;">24</button>
+                                <button class="style-btn size-shortcut-btn active" data-size="35"
+                                    style="flex: 1;">35</button>
+                                <button class="style-btn size-shortcut-btn" data-size="48" style="flex: 1;">48</button>
+                                <button class="style-btn size-shortcut-btn" data-size="64" style="flex: 1;">64</button>
+                            </div>
+                        </div>
+
+                        <!-- 样式 + 颜色 -->
+                        <div class="edit-group">
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <div style="flex: 1;">
+                                    <label>颜色</label>
+                                    <div class="color-row">
+                                        <input type="color" id="text-color" value="#000000"
+                                            style="width: 40px; height: 32px;">
+                                        <span id="text-color-hex" class="color-hex"
+                                            style="font-size: 11px;">#000000</span>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label>样式</label>
+                                    <div class="btn-group style-buttons">
+                                        <button id="toggle-bold" class="style-btn"
+                                            title="粗体"><strong>B</strong></button>
+                                        <button id="toggle-italic" class="style-btn" title="斜体"><em>I</em></button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 文字转换 (Capitalize/Uppercase) -->
+                        <div class="edit-group">
+                            <label>排版样式</label>
+                            <div class="btn-group" style="width: 100%;">
+                                <button id="text-transform-capitalize" class="style-btn" title="首字母大写"
+                                    style="flex: 1;">Aa</button>
+                                <button id="text-transform-uppercase" class="style-btn" title="全部大写"
+                                    style="flex: 1;">AA</button>
+                                <button id="text-transform-none" class="style-btn" title="清除格式"
+                                    style="flex: 1;">ab</button>
+                            </div>
+                        </div>
+
+                        <!-- 文字阴影 (简化版) -->
+                        <div class="edit-group">
+                            <label>文字阴影</label>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <input type="color" id="shadow-color" value="#000000"
+                                    style="width: 32px; height: 32px; flex-shrink: 0;" title="阴影颜色">
+                                <div style="display: flex; flex: 1; gap: 4px; font-size: 10px;">
+                                    <div style="display: flex; align-items: center; gap: 2px;">
+                                        <span style="color: var(--text-muted);">X</span>
+                                        <input type="number" id="shadow-offset-x" value="2" min="-20" max="20"
+                                            class="size-input" style="width: 36px; height: 24px;">
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 2px;">
+                                        <span style="color: var(--text-muted);">Y</span>
+                                        <input type="number" id="shadow-offset-y" value="2" min="-20" max="20"
+                                            class="size-input" style="width: 36px; height: 24px;">
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 2px;">
+                                        <span style="color: var(--text-muted);">B</span>
+                                        <input type="number" id="shadow-blur" value="4" min="0" max="30"
+                                            class="size-input" style="width: 36px; height: 24px;">
+                                    </div>
+                                </div>
+                                <button id="toggle-shadow" class="style-btn" title="开关阴影"
+                                    style="width: 28px; height: 28px; flex-shrink: 0; font-size: 12px;">×</button>
+                            </div>
+                        </div>
+
+                        <!-- 描边 -->
+                        <div class="edit-group">
+                            <label>描边</label>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <input type="color" id="stroke-color" value="#FFFFFF"
+                                    style="width: 36px; height: 32px;">
+                                <input type="range" id="stroke-width" min="0" max="10" value="0" style="flex: 1;">
+                                <span id="stroke-width-value" class="slider-value">0px</span>
+                            </div>
+                        </div>
+
+                        <!-- 字间距 / 行高 -->
                         <div style="display: flex; gap: 8px;">
-                            <div style="flex: 2;">
-                                <label>字体</label>
-                                <select id="font-family" class="font-select" style="height: 32px; font-size: 12px;">
-                                    <option value="Arial, sans-serif">Arial</option>
-                                    <option value="'Microsoft YaHei', sans-serif">微软雅黑</option>
-                                    <option value="SimHei, sans-serif">黑体</option>
-                                    <option value="SimSun, serif">宋体</option>
-                                    <option value="KaiTi, serif">楷体</option>
-                                    <option value="'Noto Sans SC', sans-serif">Noto Sans SC</option>
-                                    <option value="'PingFang SC', sans-serif">苹方</option>
-                                    <option value="Georgia, serif">Georgia</option>
-                                    <option value="'Times New Roman', serif">Times New Roman</option>
-                                </select>
-                            </div>
-                            <div style="flex: 1;">
-                                <label>渲染</label>
-                                <select id="text-render-mode" class="font-select"
-                                    style="height: 32px; font-size: 11px;">
-                                    <option value="default">默认</option>
-                                    <option value="sharp" selected>锐利</option>
-                                    <option value="strong">浑厚</option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 字号 (简化) -->
-                    <div class="edit-group">
-                        <label>字号</label>
-                        <div class="slider-row">
-                            <input type="range" id="font-size" min="8" max="120" value="20">
-                            <input type="number" id="font-size-input" class="size-input" value="20" min="8" max="200"
-                                style="width: 50px; height: 32px;">
-                            <span class="size-unit">px</span>
-                        </div>
-                        <div style="display: flex; gap: 6px; margin-top: 6px;">
-                            <button class="style-btn size-shortcut-btn" data-size="24"
-                                style="flex: 1; padding: 3px 0; font-size: 12px;">24</button>
-                            <button class="style-btn size-shortcut-btn" data-size="35"
-                                style="flex: 1; padding: 3px 0; font-size: 12px; font-weight: bold; color: #a78bfa;">35</button>
-                            <button class="style-btn size-shortcut-btn" data-size="48"
-                                style="flex: 1; padding: 3px 0; font-size: 12px;">48</button>
-                            <button class="style-btn size-shortcut-btn" data-size="64"
-                                style="flex: 1; padding: 3px 0; font-size: 12px;">64</button>
-                        </div>
-                    </div>
-
-                    <!-- 样式 + 颜色 (合并一行) -->
-                    <div class="edit-group">
-                        <div style="display: flex; align-items: center; gap: 12px;">
-                            <div>
-                                <label>样式</label>
-                                <div class="btn-group style-buttons">
-                                    <button id="toggle-bold" class="style-btn" title="粗体"
-                                        style="width: 32px; height: 32px;"><strong>B</strong></button>
-                                    <button id="toggle-italic" class="style-btn" title="斜体"
-                                        style="width: 32px; height: 32px;"><em>I</em></button>
+                            <div class="edit-group" style="flex: 1;">
+                                <label>字间距</label>
+                                <div style="display: flex; gap: 4px;">
+                                    <input type="number" id="letter-spacing-input" class="size-input" value="0" step="5"
+                                        style="width: 100%; height: 32px;">
                                 </div>
                             </div>
-                            <div style="flex: 1;">
-                                <label>颜色</label>
-                                <div class="color-row">
-                                    <input type="color" id="text-color" value="#000000"
-                                        style="width: 40px; height: 32px;">
-                                    <span id="text-color-hex" class="color-hex">#000000</span>
+                            <div class="edit-group" style="flex: 1;">
+                                <label>行高</label>
+                                <div style="display: flex; gap: 4px;">
+                                    <input type="number" id="line-height-input" class="size-input" value="1.2"
+                                        step="0.1" style="width: 100%; height: 32px;">
                                 </div>
                             </div>
                         </div>
-                    </div>
 
-                    <!-- 描边 -->
-                    <div class="edit-group">
-                        <label>描边</label>
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <input type="color" id="stroke-color" value="#FFFFFF" style="width: 36px; height: 32px;">
-                            <input type="range" id="stroke-width" min="0" max="10" value="0" style="flex: 1;">
-                            <span id="stroke-width-value" class="slider-value">0px</span>
+                        <!-- 文本内对齐 -->
+                        <div class="edit-group">
+                            <label>文本对齐</label>
+                            <div class="btn-group align-buttons">
+                                <button class="style-btn align-btn" data-align="left" title="左对齐" style="flex: 1;">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                                        fill="none" stroke="currentColor" stroke-width="2">
+                                        <line x1="4" y1="6" x2="20" y2="6"></line>
+                                        <line x1="4" y1="12" x2="14" y2="12"></line>
+                                        <line x1="4" y1="18" x2="18" y2="18"></line>
+                                    </svg>
+                                </button>
+                                <button class="style-btn align-btn active" data-align="center" title="居中"
+                                    style="flex: 1;">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                                        fill="none" stroke="currentColor" stroke-width="2">
+                                        <line x1="4" y1="6" x2="20" y2="6"></line>
+                                        <line x1="8" y1="12" x2="16" y2="12"></line>
+                                        <line x1="6" y1="18" x2="18" y2="18"></line>
+                                    </svg>
+                                </button>
+                                <button class="style-btn align-btn" data-align="right" title="右对齐" style="flex: 1;">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                                        fill="none" stroke="currentColor" stroke-width="2">
+                                        <line x1="4" y1="6" x2="20" y2="6"></line>
+                                        <line x1="10" y1="12" x2="20" y2="12"></line>
+                                        <line x1="6" y1="18" x2="20" y2="18"></line>
+                                    </svg>
+                                </button>
+                            </div>
                         </div>
-                    </div>
 
-                    <!-- 字间距 -->
-                    <div class="edit-group">
-                        <label>字间距</label>
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <input type="range" id="letter-spacing" min="-50" max="200" value="0" step="10"
-                                style="flex: 1;">
-                            <input type="number" id="letter-spacing-input" class="size-input" value="0" step="10"
-                                style="width: 55px; height: 32px;">
-                            <span class="size-unit">‰</span>
+                        <!-- 画布对齐 (PS式) -->
+                        <div class="edit-group">
+                            <label>画布对齐</label>
+                            <div class="canvas-align-row"
+                                style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;">
+                                <button class="align-canvas-btn" id="align-h-left" title="左对齐"><svg
+                                        xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                                        fill="none" stroke="currentColor" stroke-width="2">
+                                        <line x1="4" y1="4" x2="4" y2="20"></line>
+                                        <rect x="8" y="8" width="12" height="8" rx="1"></rect>
+                                    </svg></button>
+                                <button class="align-canvas-btn" id="align-h-center" title="居中"><svg
+                                        xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                                        fill="none" stroke="currentColor" stroke-width="2">
+                                        <line x1="12" y1="4" x2="12" y2="20"></line>
+                                        <rect x="6" y="8" width="10" height="8" rx="1"></rect>
+                                    </svg></button>
+                                <button class="align-canvas-btn" id="align-h-right" title="右对齐"><svg
+                                        xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                                        fill="none" stroke="currentColor" stroke-width="2">
+                                        <line x1="20" y1="4" x2="20" y2="20"></line>
+                                        <rect x="4" y="8" width="12" height="8" rx="1"></rect>
+                                    </svg></button>
+                                <button class="align-canvas-btn" id="align-v-top" title="顶对齐"><svg
+                                        xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                                        fill="none" stroke="currentColor" stroke-width="2">
+                                        <line x1="4" y1="4" x2="20" y2="4"></line>
+                                        <rect x="8" y="8" width="8" height="12" rx="1"></rect>
+                                    </svg></button>
+                                <button class="align-canvas-btn" id="align-v-center" title="垂直居中"><svg
+                                        xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                                        fill="none" stroke="currentColor" stroke-width="2">
+                                        <line x1="4" y1="12" x2="20" y2="12"></line>
+                                        <rect x="8" y="6" width="8" height="10" rx="1"></rect>
+                                    </svg></button>
+                                <button class="align-canvas-btn" id="align-v-bottom" title="底对齐"><svg
+                                        xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                                        fill="none" stroke="currentColor" stroke-width="2">
+                                        <line x1="4" y1="20" x2="20" y2="20"></line>
+                                        <rect x="8" y="4" width="8" height="12" rx="1"></rect>
+                                    </svg></button>
+                            </div>
                         </div>
-                    </div>
 
-                    <!-- 行高 -->
-                    <div class="edit-group">
-                        <label>行高</label>
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <input type="range" id="line-height" min="0.8" max="3" value="1.2" step="0.1"
-                                style="flex: 1;">
-                            <input type="number" id="line-height-input" class="size-input" value="1.2" step="0.1"
-                                style="width: 50px; height: 32px;">
-                            <span class="size-unit">x</span>
-                        </div>
-                    </div>
-
-                    <!-- 文本内对齐 -->
-                    <div class="edit-group">
-                        <label>文本对齐</label>
-                        <div class="btn-group align-buttons">
-                            <button class="style-btn align-btn" data-align="left" title="左对齐">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
-                                    fill="none" stroke="currentColor" stroke-width="2">
-                                    <line x1="4" y1="6" x2="20" y2="6"></line>
-                                    <line x1="4" y1="12" x2="14" y2="12"></line>
-                                    <line x1="4" y1="18" x2="18" y2="18"></line>
-                                </svg>
-                            </button>
-                            <button class="style-btn align-btn active" data-align="center" title="居中">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
-                                    fill="none" stroke="currentColor" stroke-width="2">
-                                    <line x1="4" y1="6" x2="20" y2="6"></line>
-                                    <line x1="8" y1="12" x2="16" y2="12"></line>
-                                    <line x1="6" y1="18" x2="18" y2="18"></line>
-                                </svg>
-                            </button>
-                            <button class="style-btn align-btn" data-align="right" title="右对齐">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
-                                    fill="none" stroke="currentColor" stroke-width="2">
-                                    <line x1="4" y1="6" x2="20" y2="6"></line>
-                                    <line x1="10" y1="12" x2="20" y2="12"></line>
-                                    <line x1="6" y1="18" x2="20" y2="18"></line>
-                                </svg>
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- 画布对齐 (PS式) -->
-                    <div class="edit-group">
-                        <label>画布对齐</label>
-                        <div class="canvas-align-row">
-                            <button class="align-canvas-btn" id="align-h-left" title="水平靠左">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
-                                    fill="none" stroke="currentColor" stroke-width="2">
-                                    <line x1="4" y1="4" x2="4" y2="20"></line>
-                                    <rect x="8" y="8" width="12" height="8" rx="1"></rect>
-                                </svg>
-                            </button>
-                            <button class="align-canvas-btn" id="align-h-center" title="水平居中">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
-                                    fill="none" stroke="currentColor" stroke-width="2">
-                                    <line x1="12" y1="4" x2="12" y2="20"></line>
-                                    <rect x="6" y="8" width="12" height="8" rx="1"></rect>
-                                </svg>
-                            </button>
-                            <button class="align-canvas-btn" id="align-h-right" title="水平靠右">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
-                                    fill="none" stroke="currentColor" stroke-width="2">
-                                    <line x1="20" y1="4" x2="20" y2="20"></line>
-                                    <rect x="4" y="8" width="12" height="8" rx="1"></rect>
-                                </svg>
-                            </button>
-                            <!-- Row 2 -->
-                            <button class="align-canvas-btn" id="align-v-top" title="垂直靠上">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
-                                    fill="none" stroke="currentColor" stroke-width="2">
-                                    <line x1="4" y1="4" x2="20" y2="4"></line>
-                                    <rect x="8" y="8" width="8" height="12" rx="1"></rect>
-                                </svg>
-                            </button>
-                            <button class="align-canvas-btn" id="align-v-center" title="垂直居中">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
-                                    fill="none" stroke="currentColor" stroke-width="2">
-                                    <line x1="4" y1="12" x2="20" y2="12"></line>
-                                    <rect x="8" y="6" width="8" height="12" rx="1"></rect>
-                                </svg>
-                            </button>
-                            <button class="align-canvas-btn" id="align-v-bottom" title="垂直靠下">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
-                                    fill="none" stroke="currentColor" stroke-width="2">
-                                    <line x1="4" y1="20" x2="20" y2="20"></line>
-                                    <rect x="8" y="4" width="8" height="12" rx="1"></rect>
-                                </svg>
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- 多选工具 -->
-                    <div class="edit-group" id="multi-select-tools" style="display: none;">
-                        <label>多选工具</label>
-                        <div class="btn-group">
-                            <button class="tool-btn-wide" id="uniform-width" title="统一宽度">统一宽度</button>
-                            <button class="tool-btn-wide" id="distribute-v" title="垂直均分">垂直均分</button>
+                        <!-- 多选工具 -->
+                        <div class="edit-group" id="multi-select-tools" style="display: none;">
+                            <label>多选工具</label>
+                            <div style="display: flex; gap: 8px;">
+                                <button class="tool-btn-wide" id="uniform-width" style="flex: 1;">统一宽度</button>
+                                <button class="tool-btn-wide" id="distribute-v" style="flex: 1;">垂直均分</button>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- 下载面板 - 点击空白处时显示 -->
-            <div class="panel-card" id="download-panel" style="display: block;">
-                <div class="card-header">
-                    <span>保存导出 💾</span>
-                </div>
-                <div class="card-body">
-                    <button class="action-btn success" id="save-image" onclick="downloadImage()">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
-                            stroke="currentColor" stroke-width="2">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                            <polyline points="7 10 12 15 17 10"></polyline>
-                            <line x1="12" y1="15" x2="12" y2="3"></line>
-                        </svg>
-                        <span>📥 保存当前</span>
-                    </button>
-                    <div style="height: 12px;"></div>
-                    <button class="action-btn primary" id="download-all-btn" onclick="downloadAllImages()">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
-                            stroke="currentColor" stroke-width="2">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                            <polyline points="17 8 12 3 7 8"></polyline>
-                            <line x1="12" y1="3" x2="12" y2="15"></line>
-                        </svg>
-                        <span>📦 批量下载 All</span>
-                    </button>
+            <!-- 固定在底部的下载按钮 -->
+            <div class="right-side-footer">
+                <div class="panel-card" id="download-panel"
+                    style="margin-bottom: 0; background: transparent; border: none; box-shadow: none;">
+                    <div class="card-body" style="padding: 0;">
 
-                    <div style="height: 12px;"></div>
-                    <button class="action-btn" id="download-direct-btn" onclick="downloadDirectly()"
-                        style="background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: var(--text-primary);">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
-                            stroke="currentColor" stroke-width="2">
-                            <path d="M7 17l5 5 5-5M12 22V4.5" />
-                        </svg>
-                        <span>🚀 直接下载 (不打包)</span>
-                    </button>
-                    <div id="multi-lang-downloads" style="margin-top: 12px; display: none;">
-                        <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">按语言下载：</div>
-                        <div id="lang-download-btns" style="display: flex; flex-direction: column; gap: 8px;"></div>
-                    </div>
+                        <!-- 🔑 快捷同步按钮（翻译后才显示） -->
+                        <div id="quick-sync-section" style="margin-bottom: 8px; display: none;">
+                            <button class="action-btn" id="quick-sync-all-btn"
+                                style="width: 100%; height: 38px; background: linear-gradient(135deg, #6366f1, #8b5cf6); border: none;"
+                                onclick="quickSyncAll()">
+                                🚀 一键同步到文件夹
+                            </button>
+                        </div>
 
-                    <!-- 🌍 全局同步功能 (移入保存区) - 默认隐藏，翻译完成后显示 -->
-                    <div id="sync-buttons-container"
-                        style="margin-top: 20px; padding-top: 15px; border-top: 1px dashed var(--border); display: none;">
-                        <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 10px;">同步设置：</div>
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                        <!-- 🔑 历史记录折叠区（始终显示） -->
+                        <details id="quick-history-details"
+                            style="background: rgba(255,255,255,0.03); border-radius: 8px; margin-bottom: 12px;">
+                            <summary
+                                style="padding: 8px 12px; cursor: pointer; font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between; align-items: center; list-style: none; gap: 8px;">
+                                <span style="flex: 1;">📜 翻译历史</span>
+                                <button class="style-btn danger" title="清空所有历史"
+                                    style="font-size: 12px; padding: 2px 6px;"
+                                    onclick="event.stopPropagation(); clearAllSyncHistory();">
+                                    🗑️
+                                </button>
+                            </summary>
+                            <div id="quick-history-list"
+                                style="max-height: 150px; overflow-y: auto; padding: 0 12px 8px;">
+                                <!-- 历史记录由JS动态生成 -->
+                            </div>
+                        </details>
+
+                        <button class="action-btn success" id="save-image" onclick="downloadImage()"
+                            style="width: 100%; height: 44px; margin-bottom: 10px;">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="7 10 12 15 17 10"></polyline>
+                                <line x1="12" y1="15" x2="12" y2="3"></line>
+                            </svg>
+                            <span>📥 保存当前结果</span>
+                        </button>
+                        <button class="action-btn primary" id="download-all-btn" onclick="downloadAllImages()"
+                            style="width: 100%; height: 44px;">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="17 8 12 3 7 8"></polyline>
+                                <line x1="12" y1="3" x2="12" y2="15"></line>
+                            </svg>
+                            <span>📦 批量打包下载</span>
+                        </button>
+
+                        <div id="multi-lang-downloads" style="margin-top: 12px; display: none;">
+                            <div
+                                style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px; text-align: center;">
+                                分语言导出</div>
+                            <div id="lang-download-btns" style="display: flex; flex-direction: column; gap: 6px;"></div>
+                        </div>
+
+                        <!-- 同步提示 -->
+                        <div id="sync-buttons-container"
+                            style="margin-top: 15px; padding-top: 15px; border-top: 1px dashed var(--border); display: none;">
                             <button id="sync-current-btn" class="style-btn" onclick="syncStylesToAllLangs()"
-                                title="仅同步当前图片的语言"
-                                style="width: 100%; height: 40px; background: rgba(168, 85, 247, 0.1); border-color: rgba(168, 85, 247, 0.3);">
-                                <span style="font-size: 14px;">🔄 当前图</span>
-                            </button>
+                                style="width: 100%; margin-bottom: 6px; font-size: 12px; height: 32px;">🔄
+                                同步样式到当前图所有语言</button>
                             <button id="sync-all-everything-btn" class="style-btn" onclick="syncStylesToEverything()"
-                                title="同步全部图片和语言"
-                                style="width: 100%; height: 40px; background: rgba(139, 92, 246, 0.2); border-color: rgba(139, 92, 246, 0.4);">
-                                <span style="font-size: 14px;">🌍 全部图</span>
-                            </button>
+                                style="width: 100%; font-size: 12px; height: 32px;">🌍 全局同步（所有图+所有语言）</button>
                         </div>
                     </div>
                 </div>
             </div>
-
-            <!-- 帮助提示已移至顶部按钮 -->
         </aside>
     </main>
 
@@ -695,14 +750,6 @@
                     </div>
                 </div>
             </div>
-        </div>
-    </div>
-
-    <!-- 加载遮罩 -->
-    <div class="loading-overlay" id="loadingOverlay">
-        <div class="loading-content">
-            <div class="spinner"></div>
-            <p class="loading-text" id="loadingText">正在处理...</p>
         </div>
     </div>
 

@@ -207,29 +207,20 @@ def remove_text():
             roi = image[y_start:y_end, x_start:x_end]
             if roi.size == 0: continue
             
-            # 2. 灰度化
-            roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            # --- 核心修改：适配Diffusion/PowerPaint模型 ---
+            # 之前用的 Canny 边缘检测会导致生成的 Mask 是破碎的笔画
+            # 这对 Diffusion 模型是灾难（它会试图保留笔画间的缝隙，导致效果像涂抹）
+            # PowerPaint 需要一个完整的“空洞”来重新生成背景
+            # 所以这里直接填充整个文本框！
             
-            # 3. 边缘检测 (Canny) - 精准找出文字笔画轮廓
-            edges = cv2.Canny(roi_gray, 50, 150)
             
-            # 4. 使用边缘作为种子，膨胀填充笔画区域
-            # 先对边缘进行膨胀，让笔画轮廓闭合
-            kernel_close = np.ones((3, 3), np.uint8)
-            edges_dilated = cv2.dilate(edges, kernel_close, iterations=2)
+            cv2.fillPoly(mask, [points], 255)
             
-            # 5. 填充闭合区域 (让笔画内部也被填满)
-            # 找轮廓并填充
-            contours, _ = cv2.findContours(edges_dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            roi_mask = np.zeros(roi_gray.shape, dtype=np.uint8)
-            cv2.drawContours(roi_mask, contours, -1, 255, cv2.FILLED)
-            
-            # 6. 额外膨胀确保完全覆盖文字边缘
-            kernel_expand = np.ones((5, 5), np.uint8)
-            roi_mask = cv2.dilate(roi_mask, kernel_expand, iterations=1)
-            
-            # 7. 将提取出的精准笔画填回全局蒙版
-            mask[y_start:y_end, x_start:x_end] = cv2.bitwise_or(mask[y_start:y_end, x_start:x_end], roi_mask)
+            # 膨胀Mask以覆盖边缘锯齿和残留 (5x5 kernel)
+            kernel = np.ones((5, 5), np.uint8)
+            mask = cv2.dilate(mask, kernel, iterations=1)
+
+            # (原Canny逻辑已移除以提升PowerPaint效果)
         
         # 保存调试蒙版
         debug_mask_path = os.path.join(debug_dir, f'debug_mask_{filename}.png')
@@ -244,19 +235,20 @@ def remove_text():
             img_base64 = base64.b64encode(img_file.read()).decode()
             mask_base64 = base64.b64encode(mask_file.read()).decode()
             
-            # 准备 JSON 数据请求 IOPaint (Lama模型)
+            # 准备 JSON 数据请求 IOPaint (适应PowerPaint)
             data = {
                 'image': f'data:image/png;base64,{img_base64}',
                 'mask': f'data:image/png;base64,{mask_base64}',
-                'model': 'lama',
-                'device': 'cuda'
+                'sd_steps': 40, # 稍微增加步数提升质量
+                'prompt': '',   # PowerPaint去除模式通常不需prompt
+                'negative_prompt': 'text, watermark, writing, letters, signature', # 负面提示词确保不去生成文字
             }
             
             response = requests.post(
                 "http://127.0.0.1:8080/api/v1/inpaint",
                 json=data,
                 headers={'Content-Type': 'application/json'},
-                timeout=30
+                timeout=600 # 增加超时到10分钟，适应CPU跑大模型
             )
             
         if response.status_code == 200:
@@ -1362,52 +1354,16 @@ def remove_text(image_path, text_positions, output_path, bg_model='opencv'):
                 roi = image[y_min:y_max, x_min:x_max]
                 h, w = roi.shape[:2]
                 
-                # === HSV 颜色分割提取文字 ===
-                # 转换到HSV颜色空间，便于颜色分析
-                hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-                gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                # === 核心修改：适配PowerPaint模型 ===
+                # PowerPaint 等扩散模型需要完整的填充区域，而不是细碎的文字笔画
+                # 直接填充整个OCR检测框 (Polygon)
                 
-                # 分析边缘像素（背景）和中心像素（文字）的颜色差异
-                edge_pixels = np.concatenate([
-                    roi[0, :], roi[-1, :], roi[:, 0], roi[:, -1]
-                ])
-                center_region = roi[h//4:3*h//4, w//4:3*w//4]
                 
-                # 计算边缘（背景）的平均亮度
-                bg_gray = np.mean([np.mean(gray[0, :]), np.mean(gray[-1, :]), 
-                                   np.mean(gray[:, 0]), np.mean(gray[:, -1])])
-                center_gray = np.mean(gray[h//4:3*h//4, w//4:3*w//4])
-                
-                # 根据亮度差异判断文字是深色还是浅色
-                if center_gray < bg_gray - 20:
-                    # 深色文字在浅色背景上：提取暗像素
-                    _, text_mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-                elif center_gray > bg_gray + 20:
-                    # 浅色文字在深色背景上：提取亮像素
-                    _, text_mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                else:
-                    # 对比度不明显，使用自适应阈值
-                    text_mask = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                                       cv2.THRESH_BINARY_INV, 11, 2)
-                
-                # 去除边缘噪点：只保留连通区域中面积较大的部分
-                contours, _ = cv2.findContours(text_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                min_area = (h * w) * 0.01  # 最小面积阈值：区域面积的1%
-                filtered_mask = np.zeros_like(text_mask)
-                for cnt in contours:
-                    if cv2.contourArea(cnt) > min_area:
-                        cv2.drawContours(filtered_mask, [cnt], -1, 255, cv2.FILLED)
-                
-                text_mask = filtered_mask
-                
-                # 轻微膨胀确保覆盖文字边缘（只膨胀2像素，防止过度扩展）
-                kernel = np.ones((3, 3), np.uint8)
-                text_mask = cv2.dilate(text_mask, kernel, iterations=1)
-                
-                # 将文字蒙版放回原位置
-                mask[y_min:y_max, x_min:x_max] = cv2.bitwise_or(
-                    mask[y_min:y_max, x_min:x_max], text_mask
-                )
+                cv2.fillPoly(mask, [pts], 255)
+
+                # 膨胀Mask以覆盖边缘锯齿和残留 (5x5 kernel)
+                kernel = np.ones((5, 5), np.uint8)
+                mask = cv2.dilate(mask, kernel, iterations=1)
                 
             except Exception as e:
                 print(f"绘制掩码失败: {str(e)}")
@@ -1470,13 +1426,14 @@ def remove_text(image_path, text_positions, output_path, bg_model='opencv'):
                             json={
                                 "image": current_image_data,  # 使用当前图像数据
                                 "mask": mask_base64,
-                                "model": "lama",  # 使用lama模型，效果最好
-                                "device": "cuda",  # 尝试使用CUDA
+                                "sd_steps": 30, # 提速
+                                # "model": "lama",  # 移除硬编码，使用当前PowerPaint
+                                # "device": "cuda",  
                                 "hd_strategy_crop_margin": 128,  # 高清策略裁剪边距
                                 "hd_strategy_crop_trigger_size": 1280,  # 高清策略触发尺寸
                                 "hd_strategy": "crop", # 高清策略使用裁剪
-                                "prompt": "",  # 空提示
-                                "negative_prompt": "",  # 空负面提示
+                                "prompt": "",  # PowerPaint context aware
+                                "negative_prompt": "text, watermark, writing, letters, signature",  # 负面提示词
                                 "use_croper": False,  # 不使用裁剪器
                                 "croper_x": 0,
                                 "croper_y": 0,
@@ -1485,7 +1442,7 @@ def remove_text(image_path, text_positions, output_path, bg_model='opencv'):
                                 "use_inpaint_model": False,
                                 "use_hdstrategy": True
                             },
-                            timeout=2  # 优化：仅等待2秒，如果服务器没开通过快速回退到OpenCV
+                            timeout=600  # 关键修改：增加超时时间以等待大模型处理
                         )
                         
                         print(f"IOPaint API响应状态码: {response.status_code}")
@@ -1879,7 +1836,7 @@ def export_to_cache():
             lang_folder = os.path.join(cache_path, lang_code)
             os.makedirs(lang_folder, exist_ok=True)
             
-            # 解码并保存
+            # 解码并保存图片
             try:
                 if ',' in image_data:
                     image_data = image_data.split(',')[1]
@@ -2021,6 +1978,112 @@ def delete_sync_history():
             return jsonify({'success': False, 'error': '文件夹不存在'})
             
     except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/get-history-images', methods=['POST'])
+def get_history_images():
+    """获取指定历史记录中的所有图片和canvas状态（用于恢复到画布）"""
+    try:
+        data = request.get_json()
+        folder_name = data.get('name', '')
+        
+        if not folder_name:
+            return jsonify({'success': False, 'error': '未指定文件夹名'})
+        
+        folder_path = os.path.join(SYNC_CACHE_FOLDER, folder_name)
+        
+        if not os.path.isdir(folder_path):
+            return jsonify({'success': False, 'error': '历史记录不存在'})
+        
+        result = {}
+        
+        # 遍历每个语言文件夹
+        for lang_folder in os.listdir(folder_path):
+            lang_path = os.path.join(folder_path, lang_folder)
+            if not os.path.isdir(lang_path):
+                continue
+            
+            images = []
+            for filename in os.listdir(lang_path):
+                file_path = os.path.join(lang_path, filename)
+                # 只处理图片文件
+                if os.path.isfile(file_path) and filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    # 读取图片并转为base64
+                    with open(file_path, 'rb') as f:
+                        image_data = base64.b64encode(f.read()).decode()
+                    
+                    images.append({
+                        'filename': filename,
+                        'imageData': f'data:image/png;base64,{image_data}'
+                    })
+            
+            if images:
+                result[lang_folder] = images
+        
+        print(f"📂 加载历史记录: {folder_name}, 语言数: {len(result)}")
+        return jsonify({'success': True, 'name': folder_name, 'images': result})
+        
+    except Exception as e:
+        print(f"❌ 获取历史图片失败: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/update-history', methods=['POST'])
+def update_history():
+    """更新指定的历史记录（覆盖现有内容）"""
+    try:
+        data = request.get_json()
+        folder_name = data.get('name', '')
+        images = data.get('images', [])
+        
+        if not folder_name:
+            return jsonify({'success': False, 'error': '未指定文件夹名'})
+        
+        folder_path = os.path.join(SYNC_CACHE_FOLDER, folder_name)
+        
+        # 安全检查
+        if not folder_path.startswith(SYNC_CACHE_FOLDER):
+            return jsonify({'success': False, 'error': '非法路径'})
+        
+        if not os.path.isdir(folder_path):
+            return jsonify({'success': False, 'error': '历史记录不存在'})
+        
+        # 清空现有内容
+        for lang_folder in os.listdir(folder_path):
+            lang_path = os.path.join(folder_path, lang_folder)
+            if os.path.isdir(lang_path):
+                shutil.rmtree(lang_path)
+        
+        # 写入新内容
+        counts = {}
+        for item in images:
+            lang_code = item.get('langCode', 'unknown')
+            filename = item.get('filename', 'image.png')
+            image_data = item.get('imageData', '')
+            
+            if not image_data:
+                continue
+            
+            lang_folder = os.path.join(folder_path, lang_code)
+            os.makedirs(lang_folder, exist_ok=True)
+            
+            try:
+                if ',' in image_data:
+                    image_data = image_data.split(',')[1]
+                image_bytes = base64.b64decode(image_data)
+                
+                dest_file = os.path.join(lang_folder, filename)
+                with open(dest_file, 'wb') as f:
+                    f.write(image_bytes)
+                
+                counts[lang_code] = counts.get(lang_code, 0) + 1
+            except Exception as e:
+                print(f"⚠️ 更新失败 {filename}: {e}")
+        
+        print(f"✅ 历史记录已更新: {folder_name}, 统计: {counts}")
+        return jsonify({'success': True, 'counts': counts})
+        
+    except Exception as e:
+        print(f"❌ 更新历史记录失败: {str(e)}")
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/open-folder', methods=['POST'])

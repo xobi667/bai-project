@@ -36,3 +36,4 @@ dist/
 *.jpeg
 *.gif
 *.webp
+python_portable/
