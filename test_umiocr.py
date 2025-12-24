@@ -861,8 +861,9 @@ def process_image():
         source_lang = request.form.get('source_lang', 'auto')
         target_lang = request.form.get('target_lang', 'en')
         bg_model = request.form.get('bg_model', 'opencv')  # opencv 或 iop
+        solid_bg_mode = request.form.get('solid_bg_mode', 'false') == 'true'  # 纯色背景模式
         
-        print(f"背景处理模型: {bg_model}")
+        print(f"背景处理模型: {bg_model}, 纯色背景模式: {solid_bg_mode}")
         
         if not image_file:
             print("错误: 未上传图片")
@@ -893,44 +894,130 @@ def process_image():
         # 确保目录存在
         os.makedirs(os.path.dirname(inpainted_path), exist_ok=True)
         
-        # 去除文字 - 传入bg_model参数控制使用IOP还是OpenCV
-        print(f"开始去除文字 (使用: {bg_model})")
-        remove_success = remove_text(image_path, text_positions, inpainted_path, bg_model)
-        
-        # 如果移除文字失败，使用原始图像并打印错误信息
-        if not remove_success or not os.path.exists(inpainted_path):
-            print("使用OpenCV进行图像修复")
+        # 🔑 纯色背景模式：提取边框颜色并用纯色矩形覆盖
+        if solid_bg_mode:
+            print("使用纯色背景模式（不使用OpenCV涂抹）")
             try:
-                # 读取原始图像
                 img = cv2.imread(image_path)
                 if img is None:
                     raise Exception("无法读取原始图像")
-                    
-                # 创建掩码
-                mask = np.zeros(img.shape[:2], dtype=np.uint8)
+                
                 for pos in text_positions:
-                    points = np.array(pos['box']).astype(np.int32)
-                    cv2.fillPoly(mask, [points], 255)
+                    # 获取文本框坐标
+                    box = pos['box']
+                    pts = np.array(box).astype(np.int32)
+                    
+                    # 计算边界矩形
+                    x_min = max(0, int(np.min(pts[:, 0])))
+                    y_min = max(0, int(np.min(pts[:, 1])))
+                    x_max = min(img.shape[1], int(np.max(pts[:, 0])))
+                    y_max = min(img.shape[0], int(np.max(pts[:, 1])))
+                    
+                    if x_max <= x_min or y_max <= y_min:
+                        continue
+                    
+                    # 🔑 提取边框颜色：从矩形边缘的四个角附近采样
+                    sample_points = []
+                    margin = 3  # 向外扩展采样区域
+                    
+                    # 左边缘采样
+                    for y in range(max(0, y_min - margin), min(img.shape[0], y_max + margin)):
+                        if x_min > margin:
+                            sample_points.append(img[y, x_min - margin])
+                    
+                    # 右边缘采样
+                    for y in range(max(0, y_min - margin), min(img.shape[0], y_max + margin)):
+                        if x_max + margin < img.shape[1]:
+                            sample_points.append(img[y, x_max + margin])
+                    
+                    # 上边缘采样
+                    for x in range(max(0, x_min - margin), min(img.shape[1], x_max + margin)):
+                        if y_min > margin:
+                            sample_points.append(img[y_min - margin, x])
+                    
+                    # 下边缘采样
+                    for x in range(max(0, x_min - margin), min(img.shape[1], x_max + margin)):
+                        if y_max + margin < img.shape[0]:
+                            sample_points.append(img[y_max + margin, x])
+                    
+                    # 计算平均颜色
+                    if sample_points:
+                        avg_color = np.mean(sample_points, axis=0).astype(np.uint8)
+                    else:
+                        # 如果无法采样，尝试从四个角直接采样
+                        corners = [
+                            (max(0, x_min - 1), max(0, y_min - 1)),
+                            (min(img.shape[1]-1, x_max), max(0, y_min - 1)),
+                            (max(0, x_min - 1), min(img.shape[0]-1, y_max)),
+                            (min(img.shape[1]-1, x_max), min(img.shape[0]-1, y_max))
+                        ]
+                        corner_colors = [img[cy, cx] for cx, cy in corners if 0 <= cx < img.shape[1] and 0 <= cy < img.shape[0]]
+                        if corner_colors:
+                            avg_color = np.mean(corner_colors, axis=0).astype(np.uint8)
+                        else:
+                            avg_color = np.array([0, 0, 0], dtype=np.uint8)  # 黑色作为后备
+                    
+                    # 🔑 用纯色矩形覆盖文字区域
+                    # 稍微扩大一点覆盖范围确保完全覆盖文字
+                    expand = 2
+                    x1 = max(0, x_min - expand)
+                    y1 = max(0, y_min - expand)
+                    x2 = min(img.shape[1], x_max + expand)
+                    y2 = min(img.shape[0], y_max + expand)
+                    
+                    # 填充矩形
+                    cv2.rectangle(img, (x1, y1), (x2, y2), avg_color.tolist(), -1)
+                    print(f"纯色填充: ({x1},{y1})-({x2},{y2}) 颜色: {avg_color.tolist()}")
                 
-                # 扩大掩码区域确保更好的修复效果
-                # 增大膨胀力度，防止文字边缘残留
-                kernel = np.ones((9,9), np.uint8)
-                mask = cv2.dilate(mask, kernel, iterations=2)
+                # 保存结果
+                cv2.imwrite(inpainted_path, img)
+                print(f"纯色背景模式成功，保存到: {inpainted_path}")
                 
-                # 使用OnpenCV的inpaint函数修复图像
-                # 升级：改用 NS (Navier-Stokes) 算法，它比 Telea 更平滑
-                # 升级：半径从 5 增加到 20，以处理更大的字体
-                print("使用增强版 OpenCV Inpaint (NS, r=20)")
-                inpainted = cv2.inpaint(img, mask, 20, cv2.INPAINT_NS)
-                
-                # 保存修复后的图像
-                cv2.imwrite(inpainted_path, inpainted)
-                print(f"使用OpenCV成功修复图像并保存到: {inpainted_path}")
             except Exception as e:
-                print(f"使用OpenCV修复失败: {str(e)}")
-                # 如果OpenCV也失败，复制原始图像
+                print(f"纯色背景模式失败: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                # 失败时复制原图
                 shutil.copy(image_path, inpainted_path)
-                print(f"复制原始图像到: {inpainted_path}")
+        else:
+            # 去除文字 - 传入bg_model参数控制使用IOP还是OpenCV
+            print(f"开始去除文字 (使用: {bg_model})")
+            remove_success = remove_text(image_path, text_positions, inpainted_path, bg_model)
+            
+            # 如果移除文字失败，使用原始图像并打印错误信息
+            if not remove_success or not os.path.exists(inpainted_path):
+                print("使用OpenCV进行图像修复")
+                try:
+                    # 读取原始图像
+                    img = cv2.imread(image_path)
+                    if img is None:
+                        raise Exception("无法读取原始图像")
+                        
+                    # 创建掩码
+                    mask = np.zeros(img.shape[:2], dtype=np.uint8)
+                    for pos in text_positions:
+                        points = np.array(pos['box']).astype(np.int32)
+                        cv2.fillPoly(mask, [points], 255)
+                    
+                    # 扩大掩码区域确保更好的修复效果
+                    # 增大膨胀力度，防止文字边缘残留
+                    kernel = np.ones((9,9), np.uint8)
+                    mask = cv2.dilate(mask, kernel, iterations=2)
+                    
+                    # 使用OnpenCV的inpaint函数修复图像
+                    # 升级：改用 NS (Navier-Stokes) 算法，它比 Telea 更平滑
+                    # 升级：半径从 5 增加到 20，以处理更大的字体
+                    print("使用增强版 OpenCV Inpaint (NS, r=20)")
+                    inpainted = cv2.inpaint(img, mask, 20, cv2.INPAINT_NS)
+                    
+                    # 保存修复后的图像
+                    cv2.imwrite(inpainted_path, inpainted)
+                    print(f"使用OpenCV成功修复图像并保存到: {inpainted_path}")
+                except Exception as e:
+                    print(f"使用OpenCV修复失败: {str(e)}")
+                    # 如果OpenCV也失败，复制原始图像
+                    shutil.copy(image_path, inpainted_path)
+                    print(f"复制原始图像到: {inpainted_path}")
         
         # 提取文本内容并翻译
         texts = [pos['text'] for pos in text_positions]

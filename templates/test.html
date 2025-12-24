@@ -9,12 +9,12 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
     <!-- Google Fonts: Varela Round (Rounded/Cute) -->
     <link href="https://fonts.googleapis.com/css2?family=Varela+Round&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/main.css?v=31-SimplifiedSync">
+    <link rel="stylesheet" href="/static/css/main.css?v=50-Magnifier">
     <!-- 引入JSZip用于批量打包下载 -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
 
-<body class="theme-purple-glow">
+<body>
     <!-- 移动端抽屉遮罩 -->
     <div class="drawer-overlay" id="drawer-overlay"></div>
     <!-- 顶部导航栏 -->
@@ -24,8 +24,8 @@
                 <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="url(#logo-grad)" stroke-width="2">
                     <defs>
                         <linearGradient id="logo-grad" x1="0" y1="0" x2="1" y2="1">
-                            <stop offset="0%" stop-color="#d946ef" />
-                            <stop offset="100%" stop-color="#a855f7" />
+                            <stop offset="0%" stop-color="#0A84FF" />
+                            <stop offset="100%" stop-color="#007AFF" />
                         </linearGradient>
                     </defs>
                     <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path>
@@ -78,6 +78,12 @@
             </div>
         </div>
         <div class="header-right">
+            <!-- 药丸型主题切换器 -->
+            <div class="theme-pill" id="theme-toggle" title="切换主题">
+                <div class="theme-pill-indicator"></div>
+                <span class="theme-pill-icon" data-theme="light">☀️</span>
+                <span class="theme-pill-icon" data-theme="dark">🌙</span>
+            </div>
             <button class="header-btn" id="sync-settings-btn" title="同步到文件夹">
                 <span style="font-size: 20px;">📂</span>
             </button>
@@ -148,18 +154,10 @@
                                 <option value="ko">🇰🇷 韩文</option>
                             </select>
                         </div>
-                        <div class="lang-swap">
-                            <button class="swap-btn" id="swapLangs" title="交换语言">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
-                                    fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M7 16V4m0 0L3 8m4-4 4 4"></path>
-                                    <path d="M17 8v12m0 0 4-4m-4 4-4-4"></path>
-                                </svg>
-                            </button>
-                        </div>
+
                         <div class="lang-group">
                             <label>目标语言 <small>(可多选)</small></label>
-                            <div id="target-langs-container" class="checkbox-grid">
+                            <div id="target-langs-container" class="lang-grid">
                                 <label class="lang-checkbox">
                                     <input type="checkbox" name="target-lang" value="en" checked>
                                     <span class="checkbox-label">🇺🇸 英语</span>
@@ -192,6 +190,10 @@
                                     <input type="checkbox" name="target-lang" value="zh">
                                     <span class="checkbox-label">🇨🇳 中文</span>
                                 </label>
+                                <label class="lang-checkbox">
+                                    <input type="checkbox" name="target-lang" value="fr">
+                                    <span class="checkbox-label">🇫🇷 法语</span>
+                                </label>
                             </div>
                         </div>
                     </div>
@@ -201,9 +203,15 @@
                 <div class="panel-card">
                     <div class="card-header">
                         <span>背景处理 🎨</span>
+                        <!-- 纯色背景勾选框 -->
+                        <label class="solid-bg-toggle" title="勾选后使用纯色矩形覆盖文字，适合纯色背景图片">
+                            <input type="checkbox" id="solid-bg-mode" name="solid-bg-mode">
+                            <span class="solid-bg-checkbox"></span>
+                            <span class="solid-bg-label">纯色背景</span>
+                        </label>
                     </div>
                     <div class="card-body">
-                        <div class="model-selector">
+                        <div class="model-selector" id="bg-model-selector">
                             <label class="model-option">
                                 <input type="radio" name="bg-model" value="opencv" checked>
                                 <span class="model-label">
@@ -218,6 +226,10 @@
                                     <span class="model-desc">精准 · 云端处理</span>
                                 </span>
                             </label>
+                        </div>
+                        <!-- 纯色背景模式提示 -->
+                        <div id="solid-bg-hint" class="solid-bg-hint" style="display: none;">
+                            <span>🎨 将提取边框颜色并用纯色矩形覆盖文字</span>
                         </div>
                     </div>
                 </div>
@@ -279,12 +291,60 @@
                     </button>
                 </div>
                 <!-- 🔑 添加矩形和文本按钮 -->
-                <button id="add-rect-btn" class="view-tab"
-                    style="margin-left: auto; background: linear-gradient(135deg, rgba(59,130,246,0.3), rgba(147,51,234,0.3)); border: 1px solid rgba(147,51,234,0.5); color: #c4b5fd;">
+                <button id="add-rect-btn" class="view-tab tool-btn-accent" style="margin-left: auto;">
                     <span style="font-size: 12px;">◻️</span> 矩形
                 </button>
-                <button id="add-text-btn-top" class="view-tab"
-                    style="background: linear-gradient(135deg, rgba(236,72,153,0.3), rgba(168,85,247,0.3)); border: 1px solid rgba(168,85,247,0.5); color: #f0abfc;">
+                <!-- 🔑 画笔工具 -->
+                <div class="brush-tool-container">
+                    <button id="brush-btn" class="view-tab tool-btn-accent" title="画笔工具 - 用于手动修补瑕疵">
+                        <span style="font-size: 12px;">🖌️</span> 画笔
+                    </button>
+                    <!-- 画笔设置面板 -->
+                    <div id="brush-panel" class="brush-settings-panel" style="display: none;">
+                        <div class="brush-panel-header">
+                            <span>🎨 画笔设置</span>
+                            <button id="brush-panel-close" class="brush-close-btn">×</button>
+                        </div>
+                        <div class="brush-panel-body">
+                            <!-- 颜色选择 -->
+                            <div class="brush-setting-row">
+                                <label>颜色</label>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="color" id="brush-color" value="#000000"
+                                        style="width: 36px; height: 28px;">
+                                    <span id="brush-color-hex"
+                                        style="font-size: 11px; color: var(--text-secondary);">#000000</span>
+                                    <button id="eyedropper-btn" class="style-btn" title="吸色工具"
+                                        style="padding: 4px 8px;">
+                                        💧
+                                    </button>
+                                </div>
+                            </div>
+                            <!-- 画笔粗细 -->
+                            <div class="brush-setting-row">
+                                <label>粗细</label>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="range" id="brush-size" min="1" max="50" value="10" style="flex: 1;">
+                                    <span id="brush-size-value" style="min-width: 30px; font-size: 12px;">10px</span>
+                                </div>
+                            </div>
+                            <!-- 快捷粗细 -->
+                            <div class="brush-setting-row">
+                                <div style="display: flex; gap: 6px;">
+                                    <button class="brush-size-preset" data-size="3">细</button>
+                                    <button class="brush-size-preset active" data-size="10">中</button>
+                                    <button class="brush-size-preset" data-size="25">粗</button>
+                                    <button class="brush-size-preset" data-size="50">超粗</button>
+                                </div>
+                            </div>
+                            <!-- 状态提示 -->
+                            <div id="brush-status" class="brush-status">
+                                点击画布开始绘制
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <button id="add-text-btn-top" class="view-tab tool-btn-accent">
                     <span style="font-size: 12px;">✏️</span> 文本
                 </button>
             </div>
@@ -585,18 +645,15 @@
 
                         <!-- 🔑 快捷同步按钮（翻译后才显示） -->
                         <div id="quick-sync-section" style="margin-bottom: 8px; display: none;">
-                            <button class="action-btn" id="quick-sync-all-btn"
-                                style="width: 100%; height: 38px; background: linear-gradient(135deg, #6366f1, #8b5cf6); border: none;"
-                                onclick="quickSyncAll()">
+                            <button class="action-btn primary" id="quick-sync-all-btn"
+                                style="width: 100%; height: 38px;" onclick="quickSyncAll()">
                                 🚀 一键同步到文件夹
                             </button>
                         </div>
 
                         <!-- 🔑 历史记录折叠区（始终显示） -->
-                        <details id="quick-history-details"
-                            style="background: rgba(255,255,255,0.03); border-radius: 8px; margin-bottom: 12px;">
-                            <summary
-                                style="padding: 8px 12px; cursor: pointer; font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between; align-items: center; list-style: none; gap: 8px;">
+                        <details id="quick-history-details" class="history-details-box">
+                            <summary class="history-summary">
                                 <span style="flex: 1;">📜 翻译历史</span>
                                 <button class="style-btn danger" title="清空所有历史"
                                     style="font-size: 12px; padding: 2px 6px;"
@@ -756,7 +813,7 @@
     <!-- 历史提示元素 -->
     <div class="history-tooltip" id="historyTooltip"></div>
 
-    <script src="/static/js/app.js?v=2024-12-23-v58-FinalStability"></script>
+    <script src="/static/js/app.js?v=2024-12-24-v78-PartialEraser"></script>
 </body>
 
 </html>
