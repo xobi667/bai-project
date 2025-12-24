@@ -39,7 +39,7 @@ const history = {
         'fontSize', 'fontFamily', 'fontWeight', 'fontStyle', 'fill', 'stroke',
         'strokeWidth', 'paintFirst', 'textAlign', 'charSpacing', 'lineHeight',
         'text', 'splitByGrapheme', 'breakWords', 'padding', 'originX', 'originY',
-        'rx', 'ry', 'isUserRect', '_originalRx', '_originalRy', 'shadow'
+        'rx', 'ry', 'isUserRect', '_originalRx', '_originalRy', 'shadow', 'globalCompositeOperation'
     ],
 
     // 🔑 获取当前图片的历史数据（每个语言+图片索引独立）
@@ -182,6 +182,7 @@ const history = {
                     angle: objData.angle || 0,
                     strokeLineCap: 'round',
                     strokeLineJoin: 'round',
+                    globalCompositeOperation: objData.globalCompositeOperation || 'source-over',
                     // 画笔路径不可选择
                     selectable: false,
                     evented: false,
@@ -455,12 +456,18 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // 🔑 纯色背景模式勾选框交互
     const solidBgCheckbox = document.getElementById('solid-bg-mode');
+    const smartBgCheckbox = document.getElementById('smart-bg-mode');
     const solidBgHint = document.getElementById('solid-bg-hint');
     const bgModelSelector = document.getElementById('bg-model-selector');
 
     if (solidBgCheckbox) {
         solidBgCheckbox.addEventListener('change', function () {
             if (this.checked) {
+                // 互斥：如果勾选了纯色，取消智能背景
+                if (smartBgCheckbox && smartBgCheckbox.checked) {
+                    smartBgCheckbox.checked = false;
+                }
+
                 // 勾选：显示提示，禁用模型选择器
                 if (solidBgHint) solidBgHint.style.display = 'block';
                 if (bgModelSelector) bgModelSelector.classList.add('disabled-by-solid');
@@ -470,6 +477,20 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (solidBgHint) solidBgHint.style.display = 'none';
                 if (bgModelSelector) bgModelSelector.classList.remove('disabled-by-solid');
                 console.log('🎨 禁用纯色背景模式');
+            }
+        });
+    }
+
+    if (smartBgCheckbox) {
+        smartBgCheckbox.addEventListener('change', function () {
+            if (this.checked) {
+                console.log('⚡ 启用智能背景模式');
+                // 互斥：如果勾选了智能，取消纯色（通过模拟点击触发逻辑）
+                if (solidBgCheckbox && solidBgCheckbox.checked) {
+                    solidBgCheckbox.click();
+                }
+            } else {
+                console.log('⚡ 禁用智能背景模式');
             }
         });
     }
@@ -1894,6 +1915,9 @@ async function translateImage() {
                 // 获取纯色背景模式
                 const solidBgCheckbox = document.getElementById('solid-bg-mode');
                 formData.append('solid_bg_mode', solidBgCheckbox && solidBgCheckbox.checked ? 'true' : 'false');
+                // 获取智能背景模式
+                const smartBgCheckbox = document.getElementById('smart-bg-mode');
+                formData.append('smart_bg_mode', smartBgCheckbox && smartBgCheckbox.checked ? 'true' : 'false');
 
                 const response = await fetch('/process_image', {
                     method: 'POST',
@@ -2038,7 +2062,7 @@ function switchLang(langCode) {
                 'breakWords', 'lockScalingFlip', 'fontSize', 'fontFamily', 'fontWeight',
                 'fontStyle', 'fill', 'stroke', 'strokeWidth', 'paintFirst', 'textAlign', 'charSpacing', 'lineHeight',
                 'rx', 'ry', 'isUserRect', '_originalRx', '_originalRy',
-                'path' // 🖌️ 画笔路径数据
+                'path', 'globalCompositeOperation' // 🖌️ 画笔路径数据
             ]);
             console.log('✅ 切换语言前保存画布状态:', appState.currentLang, appState.currentIndex);
         }
@@ -2263,6 +2287,7 @@ async function loadMultiLangImageToCanvas(langCode, index) {
                             angle: objData.angle || 0,
                             strokeLineCap: 'round',
                             strokeLineJoin: 'round',
+                            globalCompositeOperation: objData.globalCompositeOperation || 'source-over',
                             // 画笔路径不可选择
                             selectable: false,
                             evented: false,
@@ -2685,8 +2710,8 @@ function applyRenderModeToText(textObj, mode) {
         });
     } else if (renderMode === 'sharp') {
         textObj.set({
-            strokeWidth: 0.3, // 微弱描边增加锐度
-            stroke: textObj.fill, // 使用填充色
+            strokeWidth: 0, // 用户要求去除默认微弱描边
+            stroke: null, // 去除描边颜色
             paintFirst: 'stroke',
             objectCaching: false // 禁用缓存以获得并在矢量
         });
@@ -6601,30 +6626,28 @@ async function saveCurrentToHistory() {
             }
         }
 
-        // 🔑 切换到橡皮擦模式 - 使用背景色绘制实现部分擦除
+        // 🔑 切换到橡皮擦模式 - 纯删除模式，不画任何东西
         function switchToEraserMode() {
             currentToolMode = 'eraser';
             isEraserMode = true;
             isEyedropperMode = false;
-            isDrawingModeActive = true;
+            isDrawingModeActive = false; // 🔑 关键：禁用绘图，橡皮擦只删除不画
 
             if (!canvas) return;
 
-            // 🧹 启用绘图模式，使用背景色作为橡皮擦
-            canvas.isDrawingMode = true;
+            // 🧹 禁用自由绘图模式
+            canvas.isDrawingMode = false;
 
-            // 获取画布背景色（默认黑色）
-            const bgColor = canvas.backgroundColor || '#000000';
-
-            // 设置画笔为背景色
-            canvas.freeDrawingBrush.color = bgColor;
-            canvas.freeDrawingBrush.width = parseInt(brushSize.value);
-            canvas.freeDrawingBrush.decimate = 2;
-
-            // 🔑 禁用所有对象的选择（文字不可选）
+            // 🔑 设置 path 对象可被点击删除
             canvas.selection = false;
             canvas.getObjects().forEach(obj => {
-                if (obj.type !== 'image') {
+                if (obj.type === 'path') {
+                    obj.set({
+                        selectable: false,
+                        evented: true, // 允许被点击/触碰以触发删除
+                        hoverCursor: 'pointer'
+                    });
+                } else if (obj.type !== 'image') {
                     obj.set({
                         selectable: false,
                         evented: false
@@ -6633,16 +6656,17 @@ async function saveCurrentToHistory() {
             });
             canvas.renderAll();
 
+            // 隐藏画笔面板（橡皮擦不需要调整颜色/粗细）
             brushPanel.style.display = 'none';
 
-            // 🔑 显示圆形橡皮擦光标
+            // 🔑 显示橡皮擦光标（红色圆圈）
             createBrushCursor();
-            updateBrushCursor(parseInt(brushSize.value));
+            updateBrushCursor(20); // 固定大小的橡皮擦光标
             showBrushCursor(true);
 
-            // 设置橡皮擦光标样式（红色边框）
             if (brushCursor) {
                 brushCursor.style.borderColor = '#FF3B30';
+                brushCursor.style.backgroundColor = 'rgba(255, 59, 48, 0.15)';
             }
 
             const canvasContainer = document.getElementById('fabricCanvasContainer');
@@ -6651,7 +6675,7 @@ async function saveCurrentToHistory() {
             }
 
             brushBtn.classList.remove('active');
-            updateStatus('drawing', '🧹 橡皮擦模式 - 用背景色覆盖 | Alt+右键调整大小');
+            updateStatus('drawing', '🧹 橡皮擦模式：点击或拖动删除笔画 | B=画笔 V=选择');
         }
 
         // 🔑 进入吸色模式 - 带放大镜
@@ -6895,6 +6919,7 @@ async function saveCurrentToHistory() {
             // 配置画笔
             canvas.freeDrawingBrush.color = brushColor.value;
             canvas.freeDrawingBrush.width = parseInt(brushSize.value);
+            canvas.freeDrawingBrush.globalCompositeOperation = 'source-over'; // 🔑 恢复正常混合模式
             canvas.freeDrawingBrush.decimate = 2; // 平滑度
 
             // 创建并显示圆形光标
@@ -7105,24 +7130,56 @@ async function saveCurrentToHistory() {
             }
 
             // 吸色点击事件（支持X键进入吸色模式后点击）
+            let isEraserDragging = false;
+            let eraserDeletedCount = 0;
+
             canvas.on('mouse:down', function (e) {
                 if (isEyedropperMode) {
                     eyedropperClick(e.e);
                     return;
                 }
 
-                // 🧹 橡皮擦模式：点击删除画笔路径
-                if (isEraserMode && e.target && e.target.type === 'path') {
-                    canvas.remove(e.target);
-                    canvas.renderAll();
+                // 🧹 橡皮擦模式：开始拖动删除
+                if (isEraserMode) {
+                    isEraserDragging = true;
+                    eraserDeletedCount = 0;
 
-                    // 保存历史
-                    if (typeof history !== 'undefined' && history.saveState) {
-                        history.saveState();
+                    // 如果直接点击到 path，立即删除
+                    if (e.target && e.target.type === 'path') {
+                        canvas.remove(e.target);
+                        eraserDeletedCount++;
+                        canvas.renderAll();
+                        console.log('🧹 橡皮擦点击删除笔画');
                     }
+                }
+            });
 
-                    console.log('🧹 橡皮擦删除了一个笔画');
-                    updateStatus('eyedropper', '🧹 已删除笔画 | 继续点击删除 | 按V返回');
+            // 🧹 橡皮擦拖动删除：鼠标移动时检测触碰的 path
+            canvas.on('mouse:move', function (e) {
+                if (!isEraserMode || !isEraserDragging) return;
+
+                if (e.target && e.target.type === 'path') {
+                    canvas.remove(e.target);
+                    eraserDeletedCount++;
+                    canvas.renderAll();
+                    console.log('🧹 橡皮擦拖动删除笔画');
+                }
+            });
+
+            // 🧹 橡皮擦拖动结束：保存历史
+            canvas.on('mouse:up', function () {
+                if (isEraserMode && isEraserDragging) {
+                    isEraserDragging = false;
+
+                    if (eraserDeletedCount > 0) {
+                        // 保存历史
+                        if (typeof history !== 'undefined' && history.saveState) {
+                            history.saveState();
+                        }
+                        updateStatus('drawing', `🧹 已删除 ${eraserDeletedCount} 个笔画 | 继续擦除或按V返回`);
+                        console.log(`🧹 橡皮擦共删除 ${eraserDeletedCount} 个笔画`);
+                    }
+                    eraserDeletedCount = 0;
                 }
             });
 

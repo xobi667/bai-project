@@ -19,7 +19,7 @@ echo 设备: cpu
 echo 端口: 8080
 echo.
 
-venv\Scripts\python.exe -m iopaint start --model lama --device cpu --port 8080
+..\python_portable\python.exe -m iopaint start --model lama --device cpu --port 8080
 
 if %errorlevel% neq 0 (
     echo [错误] IOPaint 启动失败，请检查环境或模型。

@@ -17,7 +17,11 @@ if not exist venv\Scripts\python.exe (
 )
 echo [OK] 虚拟环境已就绪
 
-echo [2/3] 启动服务器...
+echo [2/3] 启动AI服务 (LaMa)...
+start "Xobi AI Engine" /min cmd /c "iop\启动IOPaint_LaMa快速.bat"
+timeout /t 2 /nobreak >nul
+
+echo [3/3] 启动服务器...
 echo.
 echo   访问地址: http://localhost:5001
 echo   按 Ctrl+C 可停止服务器
