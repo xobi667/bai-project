@@ -46,15 +46,15 @@ echo ========================================
 echo [4/4] 打包完成！
 echo ========================================
 echo.
-echo 可执行文件位置: dist\XobiImageTranslator.exe
+echo 可执行文件位置: dist\小白\小白の翻译.exe
 echo.
 echo 使用方法:
-echo   1. 将 dist\XobiImageTranslator.exe 复制给您的朋友
-echo   2. 双击运行即可（需要联网访问翻译API）
-echo   3. 程序会自动打开浏览器
+echo   1. 将 dist\小白 文件夹 整个 复制或压缩给您的朋友
+echo   2. 对方解压后，进入文件夹，双击 “小白の翻译.exe” 运行
+echo   3. 程序会自动启动所有依赖服务（可能需要10-20秒初始化）
 echo.
 echo 注意: 
-echo   - 您的朋友需要有 Umi-OCR 服务端运行
-echo   - 或者修改代码使用其他OCR服务
+echo   - 本版本已内置 Umi-OCR 和 AI 修复引擎，无需额外安装
+echo   - 第一次运行可能会被防火墙拦截，请允许访问网络（本地通信用）
 echo.
 pause

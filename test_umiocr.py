@@ -15,22 +15,71 @@ import time
 import logging
 import shutil
 import sys
-
-# 修改为清华镜像
-os.environ['HF_ENDPOINT'] = 'https://mirrors.tuna.tsinghua.edu.cn/hugging-face'
-os.environ['HF_HOME'] = './models'  # 设置模型缓存目录
+import subprocess
+import threading
 
 # 🔑 PyInstaller 打包兼容：获取正确的基础路径
 def get_base_path():
     """获取应用的基础路径，兼容开发环境和打包后的EXE"""
     if getattr(sys, 'frozen', False):
-        # 打包后的EXE环境
-        return sys._MEIPASS
+        # 打包后的环境
+        base_dir = sys._MEIPASS
+        # PyInstaller 6+ 默认会将数据放入 _internal 文件夹
+        internal_dir = os.path.join(base_dir, "_internal")
+        if os.path.exists(internal_dir):
+            return internal_dir
+        return base_dir
     else:
         # 开发环境
         return os.path.dirname(os.path.abspath(__file__))
 
 BASE_PATH = get_base_path()
+
+def is_port_in_use(port):
+    """检查端口是否被占用"""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(('127.0.0.1', port)) == 0
+
+def start_external_services():
+    """启动 Umi-OCR 和 IOPaint 服务"""
+    if not getattr(sys, 'frozen', False):
+        print("💡 开发环境：请确保手动启动了 Umi-OCR 和 IOPaint 服务")
+        return
+
+    # 1. 启动 Umi-OCR (端口 1224)
+    if not is_port_in_use(1224):
+        ocr_path = os.path.join(BASE_PATH, "umi_ocr", "Umi-OCR.exe")
+        if os.path.exists(ocr_path):
+            print(f"🚀 正在后台启动 Umi-OCR: {ocr_path}")
+            subprocess.Popen([ocr_path], cwd=os.path.dirname(ocr_path))
+        else:
+            print(f"❌ 找不到 Umi-OCR: {ocr_path}")
+    else:
+        print("✅ Umi-OCR 服务已在运行 (端口 1224)")
+
+    # 2. 启动 IOPaint (端口 8080)
+    if not is_port_in_use(8080):
+        # 使用打包后的 python_portable 启动 iopaint
+        python_exe = os.path.join(BASE_PATH, "python_portable", "python.exe")
+        if os.path.exists(python_exe):
+            print(f"🚀 正在后台启动 IOPaint (LaMa)...")
+            # 模拟 iop/启动IOPaint_LaMa快速.bat 的逻辑
+            env = os.environ.copy()
+            env['HF_ENDPOINT'] = 'https://hf-mirror.com'
+            env['HF_HOME'] = os.path.join(BASE_PATH, 'models')
+            env['PYTHONPATH'] = BASE_PATH
+            
+            # 使用 subprocess 启动
+            cmd = [python_exe, "-m", "iopaint", "start", "--model", "lama", "--device", "cpu", "--port", "8080"]
+            subprocess.Popen(cmd, cwd=BASE_PATH, env=env)
+        else:
+            print(f"❌ 找不到 Python 便携版，无法启动 IOPaint: {python_exe}")
+    else:
+        print("✅ IOPaint 服务已在运行 (端口 8080)")
+
+# 在启动 Flask 前启动外部服务
+threading.Thread(target=start_external_services, daemon=True).start()
 
 # 配置上传和输出文件夹
 # 这些文件夹需要在当前工作目录创建（而不是在打包目录）
@@ -113,6 +162,11 @@ def serve_uploads(filename):
 def serve_output(filename):
     output_dir = os.path.join(WORK_DIR, 'static', 'output')
     return send_from_directory(output_dir, filename)
+
+# 🔑 提供 favicon 图标
+@app.route('/favicon.ico')
+def serve_favicon():
+    return send_from_directory(BASE_PATH, 'favicon.ico', mimetype='image/x-icon')
 
 @app.route('/ocr', methods=['POST'])
 def ocr():
@@ -207,11 +261,9 @@ def remove_text():
             roi = image[y_start:y_end, x_start:x_end]
             if roi.size == 0: continue
             
-            # --- 核心修改：适配Diffusion/PowerPaint模型 ---
-            # 之前用的 Canny 边缘检测会导致生成的 Mask 是破碎的笔画
-            # 这对 Diffusion 模型是灾难（它会试图保留笔画间的缝隙，导致效果像涂抹）
-            # PowerPaint 需要一个完整的“空洞”来重新生成背景
-            # 所以这里直接填充整个文本框！
+            # --- 高质量蒙版生成逻辑 ---
+            # 直接填充整个文本框，LaMa/AI 模型需要完整的“空洞”来重新生成背景
+            # 这样处理效果比边缘检测更干净，不会留下笔画残影
             
             
             cv2.fillPoly(mask, [points], 255)
@@ -220,7 +272,7 @@ def remove_text():
             kernel = np.ones((5, 5), np.uint8)
             mask = cv2.dilate(mask, kernel, iterations=1)
 
-            # (原Canny逻辑已移除以提升PowerPaint效果)
+            # 已移除旧版 Canny 逻辑，以获得更均匀的擦除效果
         
         # 保存调试蒙版
         debug_mask_path = os.path.join(debug_dir, f'debug_mask_{filename}.png')
@@ -235,13 +287,10 @@ def remove_text():
             img_base64 = base64.b64encode(img_file.read()).decode()
             mask_base64 = base64.b64encode(mask_file.read()).decode()
             
-            # 准备 JSON 数据请求 IOPaint (适应PowerPaint)
+            # 准备 JSON 数据请求 IOPaint (LaMa快速模式)
             data = {
                 'image': f'data:image/png;base64,{img_base64}',
                 'mask': f'data:image/png;base64,{mask_base64}',
-                'sd_steps': 40, # 稍微增加步数提升质量
-                'prompt': '',   # PowerPaint去除模式通常不需prompt
-                'negative_prompt': 'text, watermark, writing, letters, signature', # 负面提示词确保不去生成文字
             }
             
             response = requests.post(
@@ -284,6 +333,69 @@ def remove_text():
     except Exception as e:
         print(f"处理失败: {str(e)}")
         return jsonify({'success': False, 'error': str(e)})
+
+
+# ========== 🔧 智能涂抹笔 API ==========
+@app.route('/api/smart_inpaint', methods=['POST'])
+def smart_inpaint():
+    """
+    智能涂抹笔 - 使用 LaMa 模型修复用户涂抹的区域
+    接收: JSON { image: base64, mask: base64 }
+    返回: { success: bool, result_image: base64 }
+    """
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'success': False, 'error': '无效的请求数据'})
+        
+        image_b64 = data.get('image', '')
+        mask_b64 = data.get('mask', '')
+        
+        if not image_b64 or not mask_b64:
+            return jsonify({'success': False, 'error': '缺少图片或遮罩数据'})
+        
+        # 去除 data:image/xxx;base64, 前缀
+        if ',' in image_b64:
+            image_b64 = image_b64.split(',')[1]
+        if ',' in mask_b64:
+            mask_b64 = mask_b64.split(',')[1]
+        
+        print("🔧 智能涂抹笔: 调用 IOPaint LaMa 模型...")
+        
+        # 准备 IOPaint 请求
+        iop_data = {
+            'image': f'data:image/png;base64,{image_b64}',
+            'mask': f'data:image/png;base64,{mask_b64}',
+        }
+        
+        # 调用 IOPaint API
+        response = requests.post(
+            "http://127.0.0.1:8080/api/v1/inpaint",
+            json=iop_data,
+            headers={'Content-Type': 'application/json'},
+            timeout=120
+        )
+        
+        if response.status_code == 200:
+            # 将响应内容转为 base64
+            result_b64 = base64.b64encode(response.content).decode()
+            print("✅ 智能涂抹笔: 修复完成")
+            return jsonify({
+                'success': True,
+                'result_image': f'data:image/png;base64,{result_b64}'
+            })
+        else:
+            raise Exception(f"IOPaint 返回错误: {response.status_code}")
+            
+    except requests.exceptions.ConnectionError:
+        return jsonify({
+            'success': False, 
+            'error': 'IOPaint 服务未启动，请先运行 iop/启动IOPaint_LaMa快速.bat'
+        })
+    except Exception as e:
+        print(f"❌ 智能涂抹笔失败: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)})
+
 
 @app.route('/output/<filename>')
 def output_file(filename):
@@ -2445,8 +2557,17 @@ def open_folder():
         return jsonify({'success': False, 'error': str(e)})
 
 if __name__ == '__main__':
-    # 注意：浏览器由启动脚本（bat文件）打开，这里不再重复打开
-    # 避免双击bat文件时打开两个浏览器窗口
+    # 🔑 打包环境自动打开浏览器
+    if getattr(sys, 'frozen', False):
+        import webbrowser
+        import time
+        import threading
+        def open_browser():
+            # 给服务启动预留一点时间
+            time.sleep(3)
+            webbrowser.open("http://127.0.0.1:5001")
+        
+        threading.Thread(target=open_browser, daemon=True).start()
     
     print("\n" + "="*50)
     print("   Xobi Image Translator 已启动！")
@@ -2454,4 +2575,4 @@ if __name__ == '__main__':
     print("   http://127.0.0.1:5001")
     print("="*50 + "\n")
     
-    app.run(debug=True, port=5001, use_reloader=False)  # 禁用reloader避免重复启动 
+    app.run(debug=False, port=5001, use_reloader=False)  # 打包环境关闭 debug

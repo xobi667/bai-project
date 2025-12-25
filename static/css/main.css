@@ -489,15 +489,18 @@ body {
 .right-side-scroll-wrapper {
     flex: 1;
     overflow-y: auto;
-    padding: 12px;
+    padding: 8px 10px;
+    /* 减少内边距 */
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 6px;
+    /* 减少间距 */
 }
 
 .right-side-footer {
     flex-shrink: 0;
-    padding: 16px;
+    padding: 10px 12px;
+    /* 减少底部区域内边距 */
     background: rgba(10, 10, 10, 0.95);
     backdrop-filter: blur(10px);
     border-top: 1px solid var(--border);
@@ -512,8 +515,8 @@ body {
     overflow: visible;
     transition: all 0.2s ease;
     flex-shrink: 0;
-    margin-bottom: 2px !important;
-    /* Minimal gap */
+    margin-bottom: 0 !important;
+    /* 无额外间距 */
 }
 
 .panel-card:hover {
@@ -521,22 +524,202 @@ body {
 }
 
 .card-header {
-    padding: 8px 0 4px 0;
-    /* Minimal padding */
+    padding: 4px 0 2px 0;
+    /* 极简标题间距 */
     background: transparent;
     border-bottom: none;
-    /* No separator */
-    font-size: 13px;
-    font-weight: 700;
+    font-size: 12px;
+    /* 略小字体 */
+    font-weight: 600;
     color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.card-body {
+    padding: 0;
+}
+
+/* ========== 编辑组紧凑样式 ========== */
+.edit-group {
+    margin-bottom: 8px;
+    /* 减少编辑组间距 */
+}
+
+.edit-group label {
+    font-size: 11px;
+    margin-bottom: 2px;
+    color: var(--text-muted);
+}
+
+/* 滑块行紧凑 */
+.slider-row {
     display: flex;
     align-items: center;
     gap: 6px;
 }
 
-.card-body {
-    padding: 0;
-    /* No body padding in sidebar */
+.slider-row input[type="range"] {
+    flex: 1;
+    margin: 4px 0;
+}
+
+/* 尺寸输入框紧凑 */
+.size-input {
+    height: 26px !important;
+    font-size: 12px;
+    padding: 0 6px;
+}
+
+/* 快捷按钮紧凑 */
+.style-btn,
+.size-shortcut-btn {
+    height: 28px;
+    padding: 0 8px;
+    font-size: 12px;
+}
+
+/* 颜色选择器紧凑 */
+.color-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.color-row input[type="color"] {
+    width: 32px !important;
+    height: 26px !important;
+}
+
+/* 色板紧凑 */
+.color-swatches {
+    margin-top: 4px !important;
+}
+
+.color-swatch {
+    width: 16px;
+    height: 16px;
+}
+
+/* ========== 图层管理器样式 (Xiangji Style) ========== */
+.layers-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 400px;
+    overflow-y: auto;
+    padding: 4px 0;
+}
+
+.layers-empty-hint {
+    text-align: center;
+    padding: 20px;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-style: italic;
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: var(--radius-sm);
+    border: 1px dashed var(--border);
+}
+
+.layer-item {
+    display: flex;
+    align-items: center;
+    padding: 8px 10px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    user-select: none;
+}
+
+.layer-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--border);
+}
+
+.layer-item.selected {
+    background: var(--accent-light);
+    border-color: var(--accent);
+}
+
+.layer-icon {
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    margin-right: 8px;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+
+.layer-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.layer-name {
+    font-size: 12px;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.layer-type {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+}
+
+.layer-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 8px;
+    opacity: 0.4;
+    transition: opacity 0.2s ease;
+}
+
+.layer-item:hover .layer-actions,
+.layer-item.selected .layer-actions {
+    opacity: 1;
+}
+
+.layer-action-btn {
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.layer-action-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
+}
+
+.layer-action-btn.active {
+    color: var(--accent);
+}
+
+.layer-action-btn.danger:hover {
+    background: rgba(255, 69, 58, 0.2);
+    color: var(--error);
 }
 
 /* 输入控件美化 */
@@ -547,6 +730,28 @@ label {
     margin-bottom: 4px;
     /* Reduced from 8px */
     display: block;
+}
+
+/* ========== 快捷色板样式 ========== */
+.color-swatches {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.color-swatch {
+    width: 18px;
+    height: 18px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.color-swatch:hover {
+    transform: scale(1.2);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+    z-index: 1;
 }
 
 select {

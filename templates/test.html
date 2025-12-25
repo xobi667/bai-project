@@ -4,7 +4,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>xobi Image Translator 😈</title>
+    <title>小白の翻译</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico?v=1766643461791">
+    <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?v=1766643461791">
     <!-- 引入fabric.js库 -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
     <!-- Google Fonts: Varela Round (Rounded/Cute) -->
@@ -13,6 +15,7 @@
     <!-- 引入JSZip用于批量打包下载 -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
+
 
 <body>
     <!-- 移动端抽屉遮罩 -->
@@ -207,7 +210,7 @@
                         <!-- 智能背景勾选框 -->
                         <label class="solid-bg-toggle" title="智能识别背景类型：纯色背景直接填充（更快更干净），复杂背景使用AI修复"
                             style="margin-right: 15px;">
-                            <input type="checkbox" id="smart-bg-mode" name="smart-bg-mode" checked>
+                            <input type="checkbox" id="smart-bg-mode" name="smart-bg-mode">
                             <span class="solid-bg-checkbox" style="border-color: #3b82f6;"></span>
                             <span class="solid-bg-label">⚡ 智能背景</span>
                         </label>
@@ -222,26 +225,20 @@
                     <div class="card-body">
                         <div class="model-selector" id="bg-model-selector">
                             <label class="model-option">
-                                <input type="radio" name="bg-model" value="opencv" checked>
+                                <input type="radio" name="bg-model" value="opencv">
                                 <span class="model-label">
                                     <span class="model-name">OpenCV</span>
                                     <span class="model-desc">最快 · 基础修复</span>
                                 </span>
                             </label>
                             <label class="model-option">
-                                <input type="radio" name="bg-model" value="lama">
+                                <input type="radio" name="bg-model" value="lama" checked>
                                 <span class="model-label">
                                     <span class="model-name">LaMa ⚡</span>
                                     <span class="model-desc">快速 · AI文字擦除</span>
                                 </span>
                             </label>
-                            <label class="model-option">
-                                <input type="radio" name="bg-model" value="iop">
-                                <span class="model-label">
-                                    <span class="model-name">PowerPaint</span>
-                                    <span class="model-desc">精准 · 较慢</span>
-                                </span>
-                            </label>
+
                         </div>
                         <!-- 纯色背景模式提示 -->
                         <div id="solid-bg-hint" class="solid-bg-hint" style="display: none;">
@@ -310,6 +307,10 @@
                 <button id="add-rect-btn" class="view-tab tool-btn-accent" style="margin-left: auto;">
                     <span style="font-size: 12px;">◻️</span> 矩形
                 </button>
+                <!-- 🔑 智能涂抹笔 - AI修复 -->
+                <button id="smart-inpaint-btn" class="view-tab tool-btn-accent" title="智能涂抹笔 - AI修复画面瑕疵 (W)">
+                    <span style="font-size: 12px;">✨</span> 涂抹
+                </button>
                 <!-- 🔑 画笔工具 -->
                 <div class="brush-tool-container">
                     <button id="brush-btn" class="view-tab tool-btn-accent" title="画笔工具 - 用于手动修补瑕疵">
@@ -367,7 +368,7 @@
 
             <div class="preview-container">
                 <div class="image-panel original-panel">
-                    <div class="panel-label">🖼️ 原图</div>
+
                     <div class="empty-placeholder" id="original-empty">
                         <span class="emoji">📷</span>
                         <span class="text">请在左侧上传图片</span>
@@ -377,7 +378,7 @@
                     </div>
                 </div>
                 <div class="image-panel result-panel">
-                    <div class="panel-label">✨ 翻译结果</div>
+
                     <div class="empty-placeholder" id="result-empty">
                         <span class="emoji">🎨</span>
                         <span class="text">翻译结果将显示在这里</span>
@@ -419,6 +420,23 @@
         <!-- 右侧面板 - 编辑器 -->
         <aside class="aside-panel right-side">
             <div class="right-side-scroll-wrapper">
+                <!-- 🔑 图层管理器 (顶部，支持滚动) -->
+                <div class="panel-card" id="layers-panel">
+                    <div class="card-header" style="justify-content: space-between;">
+                        <span>图层 📋</span>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <small id="layer-count" style="color: var(--text-muted); font-weight: normal;">0 个对象</small>
+                            <button class="style-btn" id="refresh-layers-btn" title="刷新图层"
+                                style="padding: 2px 6px; font-size: 11px;">🔄</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div id="layers-list" class="layers-list">
+                            <div class="layers-empty-hint">暂无图层对象</div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- 文字样式编辑器 -->
                 <div class="panel-card" id="text-style-editor" style="display: none;">
                     <div class="card-header">
@@ -478,7 +496,7 @@
                                 <div style="flex: 1;">
                                     <label>颜色</label>
                                     <div class="color-row">
-                                        <input type="color" id="text-color" value="#000000"
+                                        <input type="color" id="text-color" value="#000000" list="color-presets"
                                             style="width: 40px; height: 32px;">
                                         <span id="text-color-hex" class="color-hex"
                                             style="font-size: 11px;">#000000</span>
@@ -540,7 +558,7 @@
                         <div class="edit-group">
                             <label>描边</label>
                             <div style="display: flex; align-items: center; gap: 8px;">
-                                <input type="color" id="stroke-color" value="#FFFFFF"
+                                <input type="color" id="stroke-color" value="#FFFFFF" list="color-presets"
                                     style="width: 36px; height: 32px;">
                                 <input type="range" id="stroke-width" min="0" max="10" value="0" style="flex: 1;">
                                 <span id="stroke-width-value" class="slider-value">0px</span>
@@ -828,6 +846,26 @@
 
     <!-- 历史提示元素 -->
     <div class="history-tooltip" id="historyTooltip"></div>
+
+    <!-- 🎨 颜色预设列表 (用于原生取色器下拉) -->
+    <datalist id="color-presets">
+        <option>#000000</option>
+        <option>#FFFFFF</option>
+        <option>#FF0000</option>
+        <option>#00FF00</option>
+        <option>#0000FF</option>
+        <option>#FFFF00</option>
+        <option>#FF00FF</option>
+        <option>#00FFFF</option>
+        <option>#FFA500</option>
+        <option>#808080</option>
+        <option>#800000</option>
+        <option>#008000</option>
+        <option>#000080</option>
+        <option>#808000</option>
+        <option>#800080</option>
+        <option>#008080</option>
+    </datalist>
 
     <script src="/static/js/app.js?v=2024-12-24-v78-PartialEraser"></script>
 </body>

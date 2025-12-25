@@ -12,8 +12,47 @@ window.addEventListener('load', () => {
 });
 
 // 全局变量
+// 定义所有需要序列化的 Fabric 属性列表
+const FABRIC_SERIALIZE_PROPS = [
+    'left', 'top', 'width', 'height', 'scaleX', 'scaleY', 'angle',
+    'selectable', 'hasControls', 'originalStyle', 'padding', 'borderColor',
+    'cornerColor', 'cornerSize', 'transparentCorners', 'splitByGrapheme',
+    'breakWords', 'lockScalingFlip', 'fontSize', 'fontFamily', 'fontWeight',
+    'fontStyle', 'fill', 'stroke', 'strokeWidth', 'paintFirst', 'textAlign', 'charSpacing', 'lineHeight',
+    'rx', 'ry', 'isUserRect', '_originalRx', '_originalRy',
+    'path', 'globalCompositeOperation', 'shadow',
+    'isInpaintPath'  // 🔑 用于标记智能涂抹临时路径，序列化时过滤掉
+];
+
+
+// 🔑 统一序列化函数
+function serializeCanvas(c) {
+    if (!c) return null;
+    const json = c.toJSON(FABRIC_SERIALIZE_PROPS);
+    // 🔑 排除智能涂抹的临时路径（它们不应该被保存）
+    if (json.objects) {
+        json.objects = json.objects.filter(obj => !obj.isInpaintPath);
+    }
+    return json;
+}
+
+// 🔑 保存当前画布状态到 appState 的辅助函数
+function syncCurrentCanvasToState() {
+    if (canvas && appState.currentLang && appState.currentIndex >= 0) {
+        const translations = appState.translations;
+        if (translations && translations[appState.currentLang]) {
+            const currentImgObj = translations[appState.currentLang].images[appState.currentIndex];
+            if (currentImgObj) {
+                currentImgObj.canvasData = serializeCanvas(canvas);
+                console.log('💾 同步当前画布到 appState');
+            }
+        }
+    }
+}
+
 // 全局状态管理
 const appState = {
+
     images: [], // {id, file, url, status, result, canvasData, thumbnail}
     currentIndex: -1,
     syncLock: false,
@@ -1330,13 +1369,16 @@ document.addEventListener('DOMContentLoaded', function () {
     window.showRightPanel = function (type) {
         const textEditor = document.getElementById('text-style-editor');
         const downloadPanel = document.getElementById('download-panel');
+        const layersPanel = document.getElementById('layers-panel');
 
         if (type === 'edit') {
             if (textEditor) textEditor.style.display = 'block';
             if (downloadPanel) downloadPanel.style.display = 'none';
+            if (layersPanel) layersPanel.style.display = 'none'; // 编辑时隐藏图层面板
         } else {
             if (textEditor) textEditor.style.display = 'none';
             if (downloadPanel) downloadPanel.style.display = 'block';
+            if (layersPanel) layersPanel.style.display = 'block'; // 非编辑时显示图层面板
         }
     };
 
@@ -1371,6 +1413,24 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     setupSliderWheelInteraction();
+
+    // ========== 🎨 快捷色板点击事件 ==========
+    document.querySelectorAll('.color-swatches').forEach(container => {
+        const targetId = container.getAttribute('data-target');
+        const targetInput = document.getElementById(targetId);
+
+        container.querySelectorAll('.color-swatch').forEach(swatch => {
+            swatch.addEventListener('click', function () {
+                const color = this.getAttribute('data-color');
+                if (targetInput) {
+                    targetInput.value = color;
+                    // 触发 input 事件以更新 UI 和 Canvas
+                    targetInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    targetInput.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            });
+        });
+    });
 });
 
 // 修改 initCanvas 函数以添加智能吸附和事件监听器
@@ -1416,6 +1476,142 @@ function initCanvas() {
 
     // 🔑 设置矩形选择监听器
     setupRectSelectionListener();
+
+    // ========== 图层管理器逻辑 ==========
+    window.updateLayersList = function () {
+        const layersList = document.getElementById('layers-list');
+        const layerCount = document.getElementById('layer-count');
+        if (!layersList || !canvas) return;
+
+        const objects = canvas.getObjects().filter(obj =>
+            obj.type === 'textbox' || obj.type === 'i-text' || obj.type === 'rect' || obj.type === 'path'
+        );
+
+        // 更新数量显示
+        if (layerCount) layerCount.textContent = `${objects.length} 个对象`;
+
+        if (objects.length === 0) {
+            layersList.innerHTML = '<div class="layers-empty-hint">暂无图层对象</div>';
+            return;
+        }
+
+        // 倒序排列，因为Fabric的对象栈顶在数组末尾，而图层面板习惯倒序显示
+        const displayObjects = [...objects].reverse();
+
+        layersList.innerHTML = '';
+        displayObjects.forEach((obj, index) => {
+            const item = document.createElement('div');
+            item.className = 'layer-item';
+            if (canvas.getActiveObjects().includes(obj)) {
+                item.classList.add('selected');
+            }
+
+            // 获取类型图标和名称
+            let icon = '📄';
+            let name = '未命名图层';
+            let typeName = '对象';
+
+            if (obj.type === 'textbox' || obj.type === 'i-text') {
+                icon = 'Aa';
+                name = obj.text ? (obj.text.substring(0, 15) + (obj.text.length > 15 ? '...' : '')) : '空文本';
+                typeName = '文本';
+            } else if (obj.type === 'rect') {
+                icon = '◻️';
+                name = '矩形区域';
+                typeName = '形状';
+            } else if (obj.type === 'path') {
+                icon = '🖌️';
+                name = '画笔笔迹';
+                typeName = '笔画';
+            }
+
+            item.innerHTML = `
+                <div class="layer-icon">${icon}</div>
+                <div class="layer-info">
+                    <div class="layer-name">${name}</div>
+                    <div class="layer-type">${typeName}</div>
+                </div>
+                <div class="layer-actions">
+                    <button class="layer-action-btn ${obj.visible ? 'active' : ''}" data-action="toggle-visibility" title="显示/隐藏">
+                        ${obj.visible ? '👁️' : '🙈'}
+                    </button>
+                    <button class="layer-action-btn ${obj.selectable ? '' : 'active'}" data-action="toggle-lock" title="锁定/解锁">
+                        ${obj.selectable ? '🔓' : '🔒'}
+                    </button>
+                    <button class="layer-action-btn danger" data-action="delete" title="删除">
+                        🗑️
+                    </button>
+                </div>
+            `;
+
+            // 点击项选中对象
+            item.addEventListener('click', (e) => {
+                // 如果点的是按钮，不触发选中
+                if (e.target.closest('.layer-action-btn')) return;
+
+                canvas.discardActiveObject();
+                // 如果对象不可见或被锁定，点击图层列表项自动临时解锁/显示以便操作？
+                // 象寄逻辑：点击列表项直接选中，不管可见性（或者自动变成可见）
+                if (!obj.visible) {
+                    obj.set('visible', true);
+                    updateLayersList();
+                }
+
+                canvas.setActiveObject(obj);
+                canvas.requestRenderAll();
+                // 滚动到该对象
+                // canvas.centerObject(obj); // 可选
+            });
+
+            // 绑定操作按钮
+            const visibleBtn = item.querySelector('[data-action="toggle-visibility"]');
+            visibleBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                obj.set('visible', !obj.visible);
+                canvas.requestRenderAll();
+                updateLayersList();
+            });
+
+            const lockBtn = item.querySelector('[data-action="toggle-lock"]');
+            lockBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const isLocked = obj.selectable;
+                obj.set({
+                    selectable: !isLocked,
+                    evented: !isLocked,
+                    hasControls: !isLocked
+                });
+                canvas.discardActiveObject();
+                canvas.requestRenderAll();
+                updateLayersList();
+            });
+
+            const deleteBtn = item.querySelector('[data-action="delete"]');
+            deleteBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                history.saveState();
+                canvas.remove(obj);
+                canvas.requestRenderAll();
+                updateLayersList();
+            });
+
+            layersList.appendChild(item);
+        });
+    };
+
+    // 绑定刷新按钮
+    document.getElementById('refresh-layers-btn')?.addEventListener('click', () => {
+        updateLayersList();
+    });
+
+    // 监听画布事件以自动更新图层列表
+    canvas.on('object:added', () => updateLayersList());
+    canvas.on('object:removed', () => updateLayersList());
+    canvas.on('selection:created', () => updateLayersList());
+    canvas.on('selection:updated', () => updateLayersList());
+    canvas.on('selection:cleared', () => updateLayersList());
+    canvas.on('object:modified', () => updateLayersList()); // 比如文字内容改变了
+
 
     // ========== 智能吸附系统（优化版） ==========
     // 画布：只吸附到中心线
@@ -1559,33 +1755,42 @@ function initCanvas() {
         });
 
         // ========== 🧱 强制边界限制 (核心修复) ==========
+        // 🔧 使用 getBoundingRect() 获取实际边界盒，处理 originX/originY 可能为 center 的情况
         const padding = 10;
+        const boundingRect = obj.getBoundingRect(true, true); // 包含旋转和缩放
+        const actualLeft = boundingRect.left;
+        const actualTop = boundingRect.top;
+        const actualRight = actualLeft + boundingRect.width;
+        const actualBottom = actualTop + boundingRect.height;
+
+        // 计算需要的位移量
+        let deltaX = 0;
+        let deltaY = 0;
+
         // 限制左边
-        if (obj.left < padding) {
-            obj.set('left', padding);
-        }
-        // 限制顶边
-        if (obj.top < padding) {
-            obj.set('top', padding);
+        if (actualLeft < padding) {
+            deltaX = padding - actualLeft;
         }
         // 限制右边
-        if (obj.left + objWidth > canvasWidth - padding) {
-            // 如果宽度已经在限制范围内，限制位移
-            if (objWidth <= canvasWidth - 2 * padding) {
-                obj.set('left', canvasWidth - objWidth - padding);
-            } else {
-                // 如果宽度太大，靠左对齐并强制缩减宽度 (这种情况通常发生在同步长文本时)
-                obj.set('left', padding);
-                obj.set('width', (canvasWidth - 2 * padding) / obj.scaleX);
-            }
+        else if (actualRight > canvasWidth - padding) {
+            deltaX = (canvasWidth - padding) - actualRight;
+        }
+
+        // 限制顶边
+        if (actualTop < padding) {
+            deltaY = padding - actualTop;
         }
         // 限制底边
-        if (obj.top + objHeight > canvasHeight - padding) {
-            if (objHeight <= canvasHeight - 2 * padding) {
-                obj.set('top', canvasHeight - objHeight - padding);
-            } else {
-                obj.set('top', padding);
-            }
+        else if (actualBottom > canvasHeight - padding) {
+            deltaY = (canvasHeight - padding) - actualBottom;
+        }
+
+        // 应用位移修正
+        if (deltaX !== 0 || deltaY !== 0) {
+            obj.set({
+                left: obj.left + deltaX,
+                top: obj.top + deltaY
+            });
         }
 
         obj.setCoords();
@@ -2003,8 +2208,8 @@ async function translateImage() {
         showQuickSyncSection();
     }
 
-    // 🔑 自动保存翻译结果到历史记录
-    autoSaveTranslationHistory(queue, selectedLangs);
+    // 🔑 自动保存翻译结果到历史记录 - 已改为仅在下载时保存
+    // autoSaveTranslationHistory(queue, selectedLangs);
 }
 
 // 🔑 自动保存翻译历史（新翻译完成后调用）
@@ -2050,27 +2255,19 @@ function renderLangTabs(langs) {
 function switchLang(langCode) {
     if (!appState.translations[langCode]) return;
 
+    // 🔑 自动退出智能涂抹模式（如果激活）
+    if (window._smartInpaint && window._smartInpaint.isActive && typeof window.exitSmartInpaintMode === 'function') {
+        window.exitSmartInpaintMode();
+    }
+
     // 🔑 关键修复：切换前先保存当前画布状态！
     // 但如果有同步锁，不要保存（避免覆盖同步后的数据）
-    if (canvas && appState.currentLang && appState.currentIndex >= 0 && !appState.syncLock) {
-        const currentLangData = appState.translations[appState.currentLang];
-        if (currentLangData && currentLangData.images[appState.currentIndex]) {
-            currentLangData.images[appState.currentIndex].canvasData = canvas.toJSON([
-                'left', 'top', 'width', 'height', 'scaleX', 'scaleY', 'angle',
-                'selectable', 'hasControls', 'originalStyle', 'padding', 'borderColor',
-                'cornerColor', 'cornerSize', 'transparentCorners', 'splitByGrapheme',
-                'breakWords', 'lockScalingFlip', 'fontSize', 'fontFamily', 'fontWeight',
-                'fontStyle', 'fill', 'stroke', 'strokeWidth', 'paintFirst', 'textAlign', 'charSpacing', 'lineHeight',
-                'rx', 'ry', 'isUserRect', '_originalRx', '_originalRy',
-                'path', 'globalCompositeOperation' // 🖌️ 画笔路径数据
-            ]);
-            console.log('✅ 切换语言前保存画布状态:', appState.currentLang, appState.currentIndex);
-        }
-        // 🔑 保存当前语言的图片索引
-        currentLangData.lastIndex = appState.currentIndex;
-    } else if (appState.syncLock) {
+    if (!appState.syncLock) {
+        syncCurrentCanvasToState();
+    } else {
         console.log('🔒 同步锁激活，跳过保存当前画布状态');
     }
+
 
     // 🔑 恢复目标语言的上次查看索引，如果没有则默认为0
     const targetLangData = appState.translations[langCode];
@@ -2393,26 +2590,24 @@ function renderMultiLangThumbnails() {
 
         if (imgObj.status === 'done') {
             div.onclick = () => {
+                // 🔑 自动退出智能涂抹模式（如果激活）
+                if (window._smartInpaint && window._smartInpaint.isActive && typeof window.exitSmartInpaintMode === 'function') {
+                    window.exitSmartInpaintMode();
+                }
+
                 // 🔑 切换前保存当前画布状态（包含完整属性）
                 // 但如果有同步锁，不要保存（避免覆盖同步后的数据）
                 if (canvas && appState.currentLang && appState.currentIndex >= 0 && !appState.syncLock) {
                     const currentLangData = appState.translations[appState.currentLang];
                     if (currentLangData && currentLangData.images[appState.currentIndex]) {
-                        currentLangData.images[appState.currentIndex].canvasData = canvas.toJSON([
-                            'left', 'top', 'width', 'height', 'scaleX', 'scaleY', 'angle',
-                            'selectable', 'hasControls', 'originalStyle', 'padding', 'borderColor',
-                            'cornerColor', 'cornerSize', 'transparentCorners', 'splitByGrapheme',
-                            'breakWords', 'lockScalingFlip', 'fontSize', 'fontFamily', 'fontWeight',
-                            'fontStyle', 'fill', 'stroke', 'strokeWidth', 'paintFirst', 'textAlign', 'charSpacing', 'lineHeight',
-                            'rx', 'ry', 'isUserRect', '_originalRx', '_originalRy',
-                            'path' // 🖌️ 画笔路径数据
-                        ]);
+                        currentLangData.images[appState.currentIndex].canvasData = serializeCanvas(canvas);
                         console.log('✅ 保存画布状态:', appState.currentLang, appState.currentIndex);
                     }
                 } else if (appState.syncLock) {
                     console.log('🔒 同步锁激活，跳过保存当前画布状态');
                 }
                 appState.currentIndex = index;
+
                 // 🔑 修复：切换图片时不应清空历史，每张图片有独立的撤销栈
                 // if (history && typeof history.clear === 'function') {
                 //     history.clear();
@@ -2777,8 +2972,8 @@ function addManualTextbox() {
 
     // ========== 🧱 边缘生成检查 ==========
     const padding = 20;
-    const canvasWidth = canvas.width;
-    const canvasHeight = canvas.height;
+    const canvasWidth = canvas.getWidth();  // 🔧 使用 getWidth() 获取正确的画布尺寸
+    const canvasHeight = canvas.getHeight(); // 🔧 使用 getHeight() 获取正确的画布尺寸
     const objWidth = textObj.width;
     const objHeight = textObj.height;
 
@@ -3403,7 +3598,7 @@ async function switchImage(index) {
         const currentImg = appState.images[appState.currentIndex];
         // 只有当图片已处理且画布有效时才保存
         if (currentImg.status === 'done') {
-            currentImg.canvasData = canvas.toJSON();
+            currentImg.canvasData = serializeCanvas(canvas);
         }
     }
 
@@ -3663,6 +3858,10 @@ async function downloadImage() {
         link.click();
         document.body.removeChild(link);
 
+        // 🔑 只有在成功获取 dataURL 后才保存历史
+        console.log('✅ 下载成功，准备保存到同步历史');
+        saveCurrentToHistory();
+
         console.log('✅ 下载成功:', filename);
     } catch (e) {
         console.error('下载失败:', e);
@@ -3674,18 +3873,12 @@ async function downloadImage() {
 async function downloadAllImages() {
     console.log('downloadAllImages() 被调用');
 
+    // 🔑 先保存当前画布状态
+    syncCurrentCanvasToState();
+
     // 检查是否有多语言翻译数据
     const hasMultiLang = appState.translations && Object.keys(appState.translations).length > 0;
     console.log('多语言模式:', hasMultiLang, '翻译数据:', appState.translations);
-
-    // 🔑 先保存当前画布状态
-    if (canvas && appState.currentLang && appState.currentIndex >= 0) {
-        const currentLangData = appState.translations[appState.currentLang];
-        if (currentLangData && currentLangData.images[appState.currentIndex]) {
-            currentLangData.images[appState.currentIndex].canvasData = canvas.toJSON();
-            console.log('✅ 批量下载前保存画布状态:', appState.currentLang, appState.currentIndex);
-        }
-    }
 
     if (!hasMultiLang) {
         // 兼容旧模式：检查appState.images
@@ -3774,6 +3967,10 @@ async function downloadAllImages() {
         link.click();
         document.body.removeChild(link);
 
+        // 🔑 批量下载成功后保存历史
+        console.log('✅ 批量下载成功，准备保存到同步历史');
+        saveCurrentToHistory();
+
     } catch (e) {
         alert("打包下载失败: " + e.message);
         console.error(e);
@@ -3784,18 +3981,14 @@ async function downloadAllImages() {
 }
 
 // 直接下载功能 - 不打包成ZIP，直接触发多次浏览器下载
+// 直接下载功能 - 不打包成ZIP，直接触发多次浏览器下载
 async function downloadDirectly() {
     console.log('downloadDirectly() 被调用');
 
     const hasMultiLang = appState.translations && Object.keys(appState.translations).length > 0;
 
-    // 保存当前状态
-    if (canvas && appState.currentLang && appState.currentIndex >= 0) {
-        const currentLangData = appState.translations[appState.currentLang];
-        if (currentLangData && currentLangData.images[appState.currentIndex]) {
-            currentLangData.images[appState.currentIndex].canvasData = canvas.toJSON();
-        }
-    }
+    // 🔑 保存当前状态
+    syncCurrentCanvasToState();
 
     if (!hasMultiLang) {
         const processedImages = appState.images.filter(img => img.status === 'done');
@@ -3860,6 +4053,11 @@ async function downloadDirectly() {
                 console.error("单个下载失败", fileName, e);
             }
         }
+
+        // 🔑 直接下载成功后保存历史
+        console.log('✅ 直接下载成功，准备保存到同步历史');
+        saveCurrentToHistory();
+
     } catch (e) {
         alert("直接下载失败: " + e.message);
         console.error(e);
@@ -3907,15 +4105,7 @@ async function syncStylesToAllLangs() {
 
     // 获取包含关键属性的JSON
     // 明确包含我们需要同步的属性
-    const sourceJSON = canvas.toJSON([
-        'left', 'top', 'width', 'height', 'scaleX', 'scaleY', 'angle',
-        'selectable', 'hasControls', 'originalStyle', 'padding', 'borderColor',
-        'cornerColor', 'cornerSize', 'transparentCorners', 'splitByGrapheme',
-        'breakWords', 'lockScalingFlip', 'fontSize', 'fontFamily', 'fontWeight',
-        'fontStyle', 'fill', 'stroke', 'strokeWidth', 'paintFirst', 'textAlign', 'charSpacing', 'lineHeight',
-        'rx', 'ry', 'isUserRect', '_originalRx', '_originalRy',
-        'path' // 🖌️ 画笔路径数据
-    ]);
+    const sourceJSON = serializeCanvas(canvas);
 
     // 🔑 调试：显示源 JSON 的结构
     console.log('📦 源 canvasData:', {
@@ -4200,13 +4390,7 @@ async function syncStylesToEverything() {
     }
 
     // 1. 获取源样式JSON
-    const sourceJSON = canvas.toJSON([
-        'left', 'top', 'width', 'height', 'scaleX', 'scaleY', 'angle',
-        'selectable', 'hasControls', 'originalStyle', 'padding', 'borderColor',
-        'cornerColor', 'cornerSize', 'transparentCorners', 'splitByGrapheme',
-        'breakWords', 'lockScalingFlip', 'fontSize', 'fontFamily', 'fontWeight',
-        'fontStyle', 'fill', 'stroke', 'strokeWidth', 'paintFirst', 'textAlign', 'charSpacing', 'lineHeight'
-    ]);
+    const sourceJSON = serializeCanvas(canvas);
 
     // 立即保存当前这张图
     if (appState.translations[appState.currentLang] && appState.translations[appState.currentLang].images[appState.currentIndex]) {
@@ -4463,6 +4647,9 @@ function renderDownloadButtons() {
 
 // 🔑 按语言下载 - 根据开关决定打包还是单张
 async function downloadByLang(langCode, btnElement) {
+    // 🔑 保存当前状态
+    syncCurrentCanvasToState();
+
     const langData = appState.translations[langCode];
     if (!langData) {
         alert('找不到该语言的翻译数据');
@@ -4539,6 +4726,10 @@ async function downloadByLang(langCode, btnElement) {
             }
         }
 
+        // 🔑 下载成功后保存历史
+        console.log('✅ 按语言下载成功，准备保存到同步历史');
+        saveCurrentToHistory();
+
     } catch (e) {
         alert("下载失败: " + e.message);
         console.error(e);
@@ -4597,7 +4788,7 @@ async function generateCanvasDataForImage(imgObj) {
                 tempCanvas.renderAll();
 
                 // 返回JSON格式的画布数据
-                const canvasJSON = tempCanvas.toJSON();
+                const canvasJSON = serializeCanvas(tempCanvas);
                 tempCanvas.dispose();
                 resolve(canvasJSON);
             }, { crossOrigin: 'anonymous' });
@@ -4656,24 +4847,35 @@ async function exportImageOffscreen(imgObj) {
                 tempCanvas.setBackgroundImage(correctBgImg, () => {
                     // 2. 反序列化对象
                     if (imgObj.canvasData.objects && imgObj.canvasData.objects.length > 0) {
-                        fabric.util.enlivenObjects(imgObj.canvasData.objects, (enlivenedObjects) => {
-                            enlivenedObjects.forEach(obj => {
-                                tempCanvas.add(obj);
-                            });
-
-                            // 3. 渲染并导出
+                        imgObj.canvasData.objects.forEach(objData => {
                             try {
-                                tempCanvas.renderAll();
-                                const dataURL = tempCanvas.toDataURL({ format: 'png', quality: 1 });
-                                tempCanvas.dispose();
-                                resolve(dataURL);
-                            } catch (renderErr) {
-                                console.error('Export render failed:', renderErr);
-                                // 尝试回退
-                                tempCanvas.dispose();
-                                resolve(null);
+                                let fabricObj = null;
+                                if (objData.type === 'textbox' || objData.type === 'i-text' || objData.type === 'text') {
+                                    fabricObj = new fabric.Textbox(objData.text || '', objData);
+                                } else if (objData.type === 'rect') {
+                                    fabricObj = new fabric.Rect(objData);
+                                } else if (objData.type === 'path') { // 🖌️ 画笔路径
+                                    fabricObj = new fabric.Path(objData.path, objData);
+                                }
+                                if (fabricObj) {
+                                    tempCanvas.add(fabricObj);
+                                }
+                            } catch (objErr) {
+                                console.warn('创建对象失败:', objErr, objData.type);
                             }
                         });
+                        // 3. 渲染并导出
+                        try {
+                            tempCanvas.renderAll();
+                            const dataURL = tempCanvas.toDataURL({ format: 'png', quality: 1 });
+                            tempCanvas.dispose();
+                            resolve(dataURL);
+                        } catch (renderErr) {
+                            console.error('Export render failed:', renderErr);
+                            // 尝试回退
+                            tempCanvas.dispose();
+                            resolve(null);
+                        }
                     } else {
                         // 没有对象，直接导出背景
                         tempCanvas.renderAll();
@@ -4858,7 +5060,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // 注意: 我们只调整容器大小来缩放显示，Canvas内部分辨率保持不变
         // 这样编辑时还是高分辨率，显示时则跟随容器
         // 但Fabric canvas是canvas元素，style.width会拉伸内容
-        // 应该配合 setZoom? 
+        // 应该配合 setZoom?
         // 如果我们改变了 CSS width，画布会被拉伸。
         // 之前的 transform 也是拉伸。
         // 所以 style.width 拉伸是此时期望的行为 (视图缩放)。
@@ -5103,8 +5305,8 @@ function renderSyncLangPaths() {
         row.innerHTML = `
             <div class="sync-lang-label">${langName}</div>
             <div class="sync-path-wrapper">
-                <input type="text" 
-                    class="sync-path-input" 
+                <input type="text"
+                    class="sync-path-input"
                     id="sync-path-${langCode}"
                     placeholder="例如: D:\\项目\\${langCode}"
                     value="${savedPath}"
@@ -5181,6 +5383,9 @@ async function validatePath(path) {
 
 // 同步单个语言到指定文件夹
 async function syncSingleLang(langCode, btnElement) {
+    // 🔑 同步前先保存当前编辑状态
+    syncCurrentCanvasToState();
+
     const pathInput = document.getElementById(`sync-path-${langCode}`);
     const targetPath = pathInput ? pathInput.value.trim() : '';
 
@@ -5272,6 +5477,10 @@ async function syncSingleLang(langCode, btnElement) {
 
         showSyncStatus(`${LANG_NAMES[langCode] || langCode}: 同步结束，成功 ${successCount} 张，失败 ${failCount} 张`, failCount > 0);
 
+        // 🔑 同步成功后保存历史
+        console.log('✅ 单语言同步成功，准备保存到同步历史');
+        saveCurrentToHistory();
+
     } catch (e) {
         console.error('🔥 同步过程崩溃:', e);
         btnElement.innerHTML = '同步失败';
@@ -5295,6 +5504,9 @@ async function syncSingleLang(langCode, btnElement) {
 
 // 一键同步全部语言 (直接同步，不创建历史记录)
 async function syncAllToFolders() {
+    // 🔑 同步前先保存当前编辑状态
+    syncCurrentCanvasToState();
+
     const syncAllBtn = document.getElementById('sync-all-btn') || document.getElementById('quick-sync-all-btn');
     if (!syncAllBtn) return;
 
@@ -5375,7 +5587,11 @@ async function syncAllToFolders() {
 
         const msg = `✅ 同步完成！成功 ${totalSuccess} 张，失败 ${totalFail} 张`;
         showSyncStatus(msg, totalFail > 0);
-        alert(msg);
+        // alert(msg);
+
+        // 🔑 同步成功后保存历史
+        console.log('✅ 文件夹同步成功，准备保存到同步历史');
+        saveCurrentToHistory();
 
         syncAllBtn.innerHTML = '✓ 完成';
         syncAllBtn.classList.add('success');
@@ -5514,7 +5730,14 @@ async function exportImageForSync(imgObj) {
                                         charSpacing: objData.charSpacing || 0,
                                         scaleX: objData.scaleX || 1,
                                         scaleY: objData.scaleY || 1,
-                                        angle: objData.angle || 0
+                                        angle: objData.angle || 0,
+                                        // 矩形特有属性
+                                        rx: objData.rx || 0,
+                                        ry: objData.ry || 0,
+                                        isUserRect: objData.isUserRect || false,
+                                        _originalRx: objData._originalRx || 0,
+                                        _originalRy: objData._originalRy || 0,
+                                        path: objData.path || undefined // 🖌️ 画笔路径数据
                                     });
                                     console.log(`  导出文本: fill=${fillColor}, stroke=${strokeColor}, strokeWidth=${strokeWidthVal}, paintFirst=${objData.paintFirst || 'fill'}`);
                                 } else if (objData.type === 'rect') {
@@ -5536,8 +5759,13 @@ async function exportImageForSync(imgObj) {
                                         ry: objData.ry || 0,
                                         scaleX: objData.scaleX || 1,
                                         scaleY: objData.scaleY || 1,
-                                        angle: objData.angle || 0
+                                        angle: objData.angle || 0,
+                                        isUserRect: objData.isUserRect || false,
+                                        _originalRx: objData._originalRx || 0,
+                                        _originalRy: objData._originalRy || 0
                                     });
+                                } else if (objData.type === 'path') { // 🖌️ 画笔路径
+                                    fabricObj = new fabric.Path(objData.path, objData);
                                 }
 
                                 if (fabricObj) {
@@ -6542,7 +6770,8 @@ async function saveCurrentToHistory() {
             }
 
             // X = 按住进入吸色模式 (eXtract color / eyedropper)
-            if (key === 'x' && !isEyedropperMode) {
+            // 🔧 橡皮擦模式下不允许吸色
+            if (key === 'x' && !isEyedropperMode && !isEraserMode) {
                 e.preventDefault();
                 enterEyedropperMode();
                 console.log('💧 按住X进入吸色模式');
@@ -6795,14 +7024,9 @@ async function saveCurrentToHistory() {
                 canvas.freeDrawingBrush.color = hexColor;
             }
 
-            // 退出吸色模式
-            exitEyedropperMode();
-            updateStatus('drawing', `🎨 已吸取颜色 ${hexColor.toUpperCase()}`);
+            // 🔧 不自动退出吸色模式，只更新状态
+            updateStatus('eyedropper', `🎨 已吸取 ${hexColor.toUpperCase()} | 继续吸色或松开X键退出`);
             console.log('💧 吸取颜色:', hexColor);
-
-            setTimeout(() => {
-                updateStatus('drawing', '🖌️ 绘图中 | X键吸色 | Alt+右键调整大小');
-            }, 1500);
         }
 
         function exitEyedropperMode() {
@@ -6881,7 +7105,8 @@ async function saveCurrentToHistory() {
             if (!canvasContainer) return;
 
             canvasContainer.addEventListener('mouseenter', function () {
-                if (isDrawingModeActive && !isEyedropperMode) {
+                // 🔧 画笔模式或橡皮擦模式都显示光标
+                if ((isDrawingModeActive || isEraserMode) && !isEyedropperMode) {
                     showBrushCursor(true);
                     canvasContainer.style.cursor = 'none';
                 }
@@ -6893,7 +7118,8 @@ async function saveCurrentToHistory() {
             });
 
             canvasContainer.addEventListener('mousemove', function (e) {
-                if (isDrawingModeActive && !isEyedropperMode) {
+                // 🔧 画笔模式或橡皮擦模式都跟随光标
+                if ((isDrawingModeActive || isEraserMode) && !isEyedropperMode) {
                     moveBrushCursor(e.clientX, e.clientY);
                 }
             });
@@ -7220,5 +7446,434 @@ async function saveCurrentToHistory() {
         }
 
         console.log('🖌️ 画笔工具模块已初始化');
+    }
+})();
+
+// ========== ✨ 智能涂抹笔模块 ==========
+(function initSmartInpaintTool() {
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', setupSmartInpaintTool);
+    } else {
+        setupSmartInpaintTool();
+    }
+
+    function setupSmartInpaintTool() {
+        const smartInpaintBtn = document.getElementById('smart-inpaint-btn');
+        if (!smartInpaintBtn) {
+            console.warn('✨ 智能涂抹笔按钮未找到');
+            return;
+        }
+
+        // 🔧 使用全局状态，确保跨图片切换时保持一致
+        window._smartInpaint = window._smartInpaint || {
+            isActive: false,
+            paths: [],
+            boundCanvas: null
+        };
+
+        let inpaintCursor = null;
+        const INPAINT_BRUSH_SIZE = 30;
+
+        // 创建涂抹光标
+        function createInpaintCursor() {
+            if (inpaintCursor) return;
+            inpaintCursor = document.createElement('div');
+            inpaintCursor.id = 'inpaint-cursor';
+            inpaintCursor.style.cssText = `
+                position: fixed;
+                pointer-events: none;
+                width: ${INPAINT_BRUSH_SIZE}px;
+                height: ${INPAINT_BRUSH_SIZE}px;
+                border: 2px solid rgba(255, 100, 100, 0.9);
+                background: rgba(255, 0, 0, 0.2);
+                border-radius: 50%;
+                z-index: 9999;
+                display: none;
+                transform: translate(-50%, -50%);
+            `;
+            document.body.appendChild(inpaintCursor);
+        }
+
+        function showInpaintCursor(show) {
+            if (!inpaintCursor) createInpaintCursor();
+            inpaintCursor.style.display = show ? 'block' : 'none';
+        }
+
+        function moveInpaintCursor(x, y) {
+            if (!inpaintCursor) return;
+            inpaintCursor.style.left = x + 'px';
+            inpaintCursor.style.top = y + 'px';
+        }
+
+        // 切换到智能涂抹模式
+        function switchToSmartInpaintMode() {
+            if (!canvas) {
+                alert('请先上传并翻译图片');
+                return;
+            }
+
+            window._smartInpaint.isActive = true;
+            window._smartInpaint.paths = [];
+
+            // 启用自由绘图模式
+            canvas.isDrawingMode = true;
+            canvas.selection = false;
+
+            // 配置画笔为红色半透明
+            canvas.freeDrawingBrush.color = 'rgba(255, 0, 0, 0.5)';
+            canvas.freeDrawingBrush.width = INPAINT_BRUSH_SIZE;
+
+            // 禁用其他对象交互
+            canvas.getObjects().forEach(obj => {
+                if (obj.type !== 'image') {
+                    obj.set({ selectable: false, evented: false });
+                }
+            });
+
+            // 显示光标
+            createInpaintCursor();
+            showInpaintCursor(true);
+
+            // 隐藏默认光标
+            const canvasContainer = document.getElementById('fabricCanvasContainer');
+            if (canvasContainer) {
+                canvasContainer.style.cursor = 'none';
+            }
+
+            smartInpaintBtn.classList.add('active');
+            console.log('✨ 进入智能涂抹模式');
+
+            // 显示提示
+            const statusEl = document.getElementById('brush-status');
+            if (statusEl) {
+                statusEl.textContent = '✨ 涂抹要修复的区域，松开鼠标自动处理';
+                statusEl.style.color = '#FF6B6B';
+            }
+        }
+
+        // 退出智能涂抹模式
+        function exitSmartInpaintMode() {
+            window._smartInpaint.isActive = false;
+
+            // 🔑 清除所有未处理的涂抹路径
+            if (canvas && window._smartInpaint.paths.length > 0) {
+                window._smartInpaint.paths.forEach(p => {
+                    try { canvas.remove(p); } catch (e) { }
+                });
+                window._smartInpaint.paths = [];
+            }
+
+            // 🔑 清除延迟处理定时器
+            if (window._inpaintTimer) {
+                clearTimeout(window._inpaintTimer);
+                window._inpaintTimer = null;
+            }
+
+            if (canvas) {
+                canvas.isDrawingMode = false;
+                canvas.selection = true;
+
+                // 恢复对象交互（排除所有 path 类型）
+                canvas.getObjects().forEach(obj => {
+                    if (obj.type !== 'image' && obj.type !== 'path') {
+                        obj.set({ selectable: true, evented: true });
+                    }
+                });
+                canvas.renderAll();
+            }
+
+            showInpaintCursor(false);
+            smartInpaintBtn.classList.remove('active');
+
+            const canvasContainer = document.getElementById('fabricCanvasContainer');
+            if (canvasContainer) {
+                canvasContainer.style.cursor = '';
+            }
+
+            // 🔑 恢复状态提示
+            const statusEl = document.getElementById('brush-status');
+            if (statusEl) {
+                statusEl.textContent = '';
+                statusEl.style.color = '';
+            }
+
+            console.log('✨ 退出智能涂抹模式');
+        }
+
+        // 🔑 暴露全局退出函数，供图片切换时调用
+        window.exitSmartInpaintMode = exitSmartInpaintMode;
+
+        // 生成遮罩并调用 API
+        async function processInpaint() {
+            if (!canvas || window._smartInpaint.paths.length === 0) return;
+
+            console.log('✨ 开始生成遮罩并调用 AI...');
+
+            // 显示加载提示
+            const loadingOverlay = document.getElementById('loadingOverlay');
+            const loadingText = document.getElementById('loadingText');
+            if (loadingOverlay) {
+                loadingOverlay.classList.add('active');
+                if (loadingText) loadingText.textContent = '✨ AI 正在修复涂抹区域...';
+            }
+
+            try {
+                // 1. 获取当前背景图的 base64
+                const bgImage = canvas.backgroundImage;
+                if (!bgImage) {
+                    throw new Error('没有背景图片');
+                }
+
+                // 创建临时画布获取背景
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = canvas.getWidth();
+                tempCanvas.height = canvas.getHeight();
+                const tempCtx = tempCanvas.getContext('2d');
+
+                // 绘制背景
+                tempCtx.drawImage(bgImage._element, 0, 0, tempCanvas.width, tempCanvas.height);
+                const imageBase64 = tempCanvas.toDataURL('image/png');
+
+                // 2. 生成遮罩图 (黑底白色涂抹区域)
+                const maskCanvas = document.createElement('canvas');
+                maskCanvas.width = canvas.getWidth();
+                maskCanvas.height = canvas.getHeight();
+                const maskCtx = maskCanvas.getContext('2d');
+
+                // 黑色背景
+                maskCtx.fillStyle = '#000000';
+                maskCtx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+
+                // 绘制白色遮罩路径
+                maskCtx.strokeStyle = '#FFFFFF';
+                maskCtx.lineCap = 'round';
+                maskCtx.lineJoin = 'round';
+                maskCtx.lineWidth = INPAINT_BRUSH_SIZE;
+
+                window._smartInpaint.paths.forEach(pathObj => {
+                    if (pathObj.path) {
+                        const pathData = pathObj.path;
+                        maskCtx.beginPath();
+                        pathData.forEach((cmd, i) => {
+                            if (cmd[0] === 'M') {
+                                maskCtx.moveTo(cmd[1], cmd[2]);
+                            } else if (cmd[0] === 'Q') {
+                                maskCtx.quadraticCurveTo(cmd[1], cmd[2], cmd[3], cmd[4]);
+                            } else if (cmd[0] === 'L') {
+                                maskCtx.lineTo(cmd[1], cmd[2]);
+                            }
+                        });
+                        maskCtx.stroke();
+                    }
+                });
+
+                const maskBase64 = maskCanvas.toDataURL('image/png');
+
+                // 3. 调用后端 API
+                const response = await fetch('/api/smart_inpaint', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        image: imageBase64,
+                        mask: maskBase64
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success && result.result_image) {
+                    // 4. 应用修复结果到画布背景
+                    fabric.Image.fromURL(result.result_image, function (img) {
+                        img.set({
+                            originX: 'left',
+                            originY: 'top',
+                            left: 0,
+                            top: 0,
+                            scaleX: canvas.getWidth() / img.width,
+                            scaleY: canvas.getHeight() / img.height
+                        });
+
+                        canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas));
+
+                        // 删除涂抹路径
+                        window._smartInpaint.paths.forEach(p => canvas.remove(p));
+                        window._smartInpaint.paths = [];
+
+                        canvas.renderAll();
+
+                        // 🔑 关键修复：保存修复后的背景图到 appState，确保切换图片后不丢失
+                        if (appState.currentLang && appState.currentIndex >= 0 && appState.translations) {
+                            const currentImgObj = appState.translations[appState.currentLang].images[appState.currentIndex];
+                            if (currentImgObj && currentImgObj.result) {
+                                // 保存新的背景图 URL
+                                currentImgObj.result.inpainted_url = result.result_image;
+                                console.log('✅ 已保存修复后的背景图到 appState');
+                            }
+                        }
+
+                        // 同步当前画布状态
+                        if (typeof syncCurrentCanvasToState === 'function') {
+                            syncCurrentCanvasToState();
+                        }
+
+                        // 保存历史
+                        if (typeof history !== 'undefined' && history.saveState) {
+                            history.saveState();
+                        }
+
+                        console.log('✅ 智能涂抹修复完成');
+                    }, { crossOrigin: 'anonymous' });
+
+                } else {
+                    throw new Error(result.error || 'AI 修复失败');
+                }
+
+            } catch (err) {
+                console.error('❌ 智能涂抹失败:', err);
+                alert('智能涂抹失败: ' + err.message);
+
+                // 删除失败的涂抹路径
+                window._smartInpaint.paths.forEach(p => canvas.remove(p));
+                window._smartInpaint.paths = [];
+                canvas.renderAll();
+            } finally {
+                // 隐藏加载
+                if (loadingOverlay) {
+                    loadingOverlay.classList.remove('active');
+                }
+            }
+        }
+
+        // 按钮点击事件
+        smartInpaintBtn.addEventListener('click', function () {
+            if (window._smartInpaint.isActive) {
+                exitSmartInpaintMode();
+            } else {
+                switchToSmartInpaintMode();
+            }
+        });
+
+        // 快捷键 W
+        document.addEventListener('keydown', function (e) {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+            if (e.key.toLowerCase() === 'w') {
+                e.preventDefault();
+                if (window._smartInpaint.isActive) {
+                    exitSmartInpaintMode();
+                } else {
+                    switchToSmartInpaintMode();
+                }
+            }
+
+            // V 或 Escape 退出
+            if ((e.key.toLowerCase() === 'v' || e.key === 'Escape') && window._smartInpaint.isActive) {
+                exitSmartInpaintMode();
+            }
+        });
+
+        // 鼠标移动跟踪光标
+        document.addEventListener('mousemove', function (e) {
+            if (window._smartInpaint.isActive) {
+                moveInpaintCursor(e.clientX, e.clientY);
+            }
+        });
+
+        // 画布区域鼠标事件
+        function bindCanvasEvents() {
+            if (!canvas) {
+                setTimeout(bindCanvasEvents, 500);
+                return;
+            }
+
+            // 🔧 检查是否已经绑定到当前 canvas 实例
+            if (window._smartInpaint.boundCanvas === canvas) {
+                console.log('✨ 智能涂抹笔事件已绑定到当前画布，跳过');
+                return;
+            }
+
+            // 标记当前 canvas 实例
+            window._smartInpaint.boundCanvas = canvas;
+
+            // 路径创建完成后收集并处理
+            canvas.on('path:created', function (e) {
+                if (!window._smartInpaint.isActive) return;
+
+                const path = e.path;
+                if (path) {
+                    // 🔑 标记为智能涂抹路径，用于排除序列化
+                    path.set({
+                        selectable: false,
+                        evented: false,
+                        stroke: 'rgba(255, 0, 0, 0.5)',
+                        fill: null,
+                        isInpaintPath: true  // 🔑 关键标记
+                    });
+
+                    window._smartInpaint.paths.push(path);
+                    canvas.renderAll();
+
+                    console.log('✨ 收集涂抹路径，共', window._smartInpaint.paths.length, '条');
+
+                    // 延迟处理，允许连续涂抹
+                    clearTimeout(window._inpaintTimer);
+                    window._inpaintTimer = setTimeout(() => {
+                        if (window._smartInpaint.paths.length > 0 && window._smartInpaint.isActive) {
+                            processInpaint();
+                        }
+                    }, 800); // 800ms 无操作后自动处理
+                }
+            });
+
+            console.log('✨ 智能涂抹笔事件已绑定到新画布');
+        }
+
+        // 🔧 暴露全局重新绑定函数，供图片切换时调用
+        window.rebindSmartInpaint = function () {
+            window._smartInpaint.boundCanvas = null; // 清除绑定标记
+            bindCanvasEvents();
+        };
+
+        // 尝试绑定
+        if (typeof canvas !== 'undefined' && canvas) {
+            bindCanvasEvents();
+        } else {
+            setTimeout(bindCanvasEvents, 1000);
+        }
+
+        // 🔧 监听画布变化，自动重新绑定（每秒检查一次）
+        setInterval(function () {
+            if (typeof canvas === 'undefined' || !canvas) return;
+
+            // 检查 canvas 实例变化，需要重新绑定事件
+            if (window._smartInpaint.boundCanvas !== canvas) {
+                console.log('✨ 检测到画布实例变化，重新绑定事件');
+                bindCanvasEvents();
+            }
+
+            // 🔧 关键修复：检查智能涂抹模式状态一致性
+            // 如果 isActive 为 true 但 canvas 状态不对（被其他操作重置了），重新应用设置
+            if (window._smartInpaint.isActive) {
+                if (!canvas.isDrawingMode ||
+                    canvas.freeDrawingBrush.color !== 'rgba(255, 0, 0, 0.5)' ||
+                    canvas.freeDrawingBrush.width !== INPAINT_BRUSH_SIZE) {
+
+                    console.log('✨ 检测到智能涂抹状态被重置，重新应用设置');
+                    canvas.isDrawingMode = true;
+                    canvas.selection = false;
+                    canvas.freeDrawingBrush.color = 'rgba(255, 0, 0, 0.5)';
+                    canvas.freeDrawingBrush.width = INPAINT_BRUSH_SIZE;
+
+                    // 重新显示光标
+                    showInpaintCursor(true);
+                    const canvasContainer = document.getElementById('fabricCanvasContainer');
+                    if (canvasContainer) {
+                        canvasContainer.style.cursor = 'none';
+                    }
+                }
+            }
+        }, 500); // 改为每500ms检查一次，更快响应
+
+        console.log('✨ 智能涂抹笔模块已初始化');
     }
 })();

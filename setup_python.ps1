@@ -1,12 +1,16 @@
 
 $ErrorActionPreference = "Stop"
 
-$workDir = "e:\bai"
-$pythonDir = "$workDir\python_portable"
+# 使用相对路径，避免非ASCII字符路径解析问题
+$workDir = Get-Location
+$pythonDir = Join-Path $workDir "python_portable"
 $zipUrl = "https://www.python.org/ftp/python/3.10.11/python-3.10.11-embed-amd64.zip"
-$zipPath = "$workDir\python.zip"
+$zipPath = Join-Path $workDir "python.zip"
 $getPipUrl = "https://bootstrap.pypa.io/get-pip.py"
-$getPipPath = "$pythonDir\get-pip.py"
+$getPipPath = Join-Path $pythonDir "get-pip.py"
+
+Write-Host "Work Directory: $workDir"
+Write-Host "Python Directory: $pythonDir"
 
 Write-Host "Creating directory..."
 if (!(Test-Path $pythonDir)) { New-Item -ItemType Directory -Path $pythonDir | Out-Null }
@@ -19,7 +23,7 @@ Expand-Archive -Path $zipPath -DestinationPath $pythonDir -Force
 Remove-Item $zipPath
 
 Write-Host "Configuring python310._pth to enable site-packages..."
-$pthFile = "$pythonDir\python310._pth"
+$pthFile = Join-Path $pythonDir "python310._pth"
 $content = Get-Content $pthFile
 $content = $content -replace "#import site", "import site"
 Set-Content -Path $pthFile -Value $content
